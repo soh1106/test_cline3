@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3Dモデルビューア</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000000;
+            font-family: sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 10px;
+            font-size: 14px;
+            border-radius: 4px;
+        }
+        #controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 10px;
+            font-size: 14px;
+            border-radius: 4px;
+            width: 250px;
+        }
+        #controls button {
+            margin: 5px;
+            padding: 5px 10px;
+            background: #4a90e2;
+            border: none;
+            border-radius: 3px;
+            color: white;
+            cursor: pointer;
+        }
+        #controls button:hover {
+            background: #357ae8;
+        }
+        #controls input {
+            margin: 5px 0;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-bottom: 3px;
+        }
+        #file-upload {
+            margin-bottom: 10px;
+        }
+        #file-upload-label {
+            display: inline-block;
+            padding: 8px 12px;
+            background: #4a90e2;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 5px;
+        }
+        #file-upload-label:hover {
+            background: #357ae8;
+        }
+        #file-input {
+            display: none;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 18px;
+            display: none;
+        }
+        #error-message {
+            color: #ff6b6b;
+            margin-top: 5px;
+            display: none;
+        }
+        #model-info {
+            margin-top: 10px;
+            padding: 5px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+        }
+        .slider-container {
+            margin-top: 10px;
+        }
+        .slider-container label {
+            display: flex;
+            justify-content: space-between;
+        }
+        .slider-container label span {
+            font-size: 12px;
+        }
+        #texture-canvas {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">ドラッグ: 回転 | スクロール: ズーム</div>
+    <div id="controls">
+        <div class="control-group">
+            <h3 style="margin-top: 0;">3Dモデルビューア</h3>
+            <div id="file-upload">
+                <label id="file-upload-label" for="file-input">GLBファイルを選択</label>
+                <input type="file" id="file-input" accept=".glb,.gltf">
+                <div id="file-name"></div>
+                <div id="error-message"></div>
+            </div>
+            <div id="model-info" style="display: none;">
+                <div id="model-name"></div>
+            </div>
+        </div>
+        <hr>
+        <div class="control-group">
+            <label for="texture-type">テクスチャ:</label>
+            <select id="texture-type">
+                <option value="stone">石灯籠</option>
+                <option value="camouflage">迷彩模様</option>
+                <option value="solid">単色</option>
+                <option value="wireframe">ワイヤーフレームのみ</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="color">色:</label>
+            <input type="color" id="color" value="#4a90e2">
+        </div>
+        <div class="control-group">
+            <label for="wireframe">ワイヤーフレーム:</label>
+            <input type="checkbox" id="wireframe">
+        </div>
+        <div class="control-group">
+            <button id="toggleRotation">回転オン/オフ</button>
+        </div>
+        <div class="control-group">
+            <button id="resetCamera">カメラリセット</button>
+        </div>
+        <div class="control-group">
+            <button id="tiltModelY">Y軸に25度傾ける</button>
+        </div>
+        <div class="control-group">
+            <button id="tiltModelX">X軸に25度傾ける</button>
+        </div>
+        <div class="control-group slider-container">
+            <label for="rotationY">Y軸回転: <span id="rotationYValue">0°</span></label>
+            <input type="range" id="rotationY" min="-180" max="180" value="0" step="1">
+        </div>
+        <div class="control-group slider-container">
+            <label for="rotationX">X軸回転: <span id="rotationXValue">0°</span></label>
+            <input type="range" id="rotationX" min="-180" max="180" value="0" step="1">
+        </div>
+        <hr>
+        <div class="control-group">
+            <h3>物理シミュレーション</h3>
+            <button id="startSimulation">シミュレーション開始</button>
+            <button id="resetSimulation">リセット</button>
+        </div>
+        <div class="control-group slider-container">
+            <label for="slopeAngle">坂の角度: <span id="slopeAngleValue">15°</span></label>
+            <input type="range" id="slopeAngle" min="0" max="45" value="15" step="1">
+        </div>
+        <div class="control-group">
+            <label for="friction">摩擦係数: <span id="frictionValue">0.3</span></label>
+            <input type="range" id="friction" min="0" max="1" value="0.3" step="0.05">
+        </div>
+    </div>
+    <div id="loading">モデルを読み込み中...</div>
+    <canvas id="texture-canvas" width="512" height="512"></canvas>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    
+    <script>
+        // 物理世界の設定
+        let world;
+        let sphereBody;
+        let groundBody;
+        let slopeBody;
+        let slopeMesh;
+        let timeStep = 1/60;
+        let isSimulationRunning = false;
+        
+        function initPhysics() {
+            // 物理世界を作成
+            world = new CANNON.World();
+            world.gravity.set(0, -9.82, 0); // 重力を設定
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+            
+            // 地面の物理ボディを作成
+            const groundShape = new CANNON.Plane();
+            groundBody = new CANNON.Body({
+                mass: 0, // 質量0で固定
+                position: new CANNON.Vec3(0, -2, 0),
+                shape: groundShape
+            });
+            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2); // 地面を水平にする
+            world.addBody(groundBody);
+            
+            // 坂の物理ボディを作成
+            createSlope();
+            
+            // 球体の物理ボディを作成
+            createSphereBody();
+        }
+        
+        function createSlope() {
+            // 既存の坂を削除
+            if (slopeMesh) {
+                scene.remove(slopeMesh);
+            }
+            if (slopeBody) {
+                world.removeBody(slopeBody);
+            }
+            
+            // 坂の角度を取得
+            const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
+            const radians = toRadians(slopeAngle);
+            
+            // 坂のサイズ
+            const slopeWidth = 10;
+            const slopeHeight = 0.2;
+            const slopeDepth = 15;
+            
+            // Three.jsの坂メッシュを作成
+            const slopeGeometry = new THREE.BoxGeometry(slopeWidth, slopeHeight, slopeDepth);
+            const slopeMaterial = new THREE.MeshPhongMaterial({
+                color: 0x999999,
+                transparent: true,
+                opacity: 0.8
+            });
+            slopeMesh = new THREE.Mesh(slopeGeometry, slopeMaterial);
+            
+            // 坂の位置と回転を設定
+            slopeMesh.position.set(0, 0, 0);
+            slopeMesh.rotation.x = radians;
+            scene.add(slopeMesh);
+            
+            // 坂の物理ボディを作成
+            const slopeShape = new CANNON.Box(new CANNON.Vec3(slopeWidth/2, slopeHeight/2, slopeDepth/2));
+            slopeBody = new CANNON.Body({
+                mass: 0, // 質量0で固定
+                position: new CANNON.Vec3(0, 0, 0),
+                shape: slopeShape
+            });
+            
+            // 摩擦係数を設定
+            const friction = parseFloat(document.getElementById('friction').value);
+            slopeBody.material = new CANNON.Material();
+            slopeBody.material.friction = friction;
+            
+            // 坂の回転を設定
+            slopeBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), radians);
+            world.addBody(slopeBody);
+        }
+        
+        function createSphereBody() {
+            // 球体の物理ボディを作成
+            const radius = 1;
+            const sphereShape = new CANNON.Sphere(radius);
+            
+            // 坂の角度に基づいて球体の初期位置を計算
+            const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
+            const radians = toRadians(slopeAngle);
+            const startHeight = 5; // 坂の上部からの高さ
+            
+            // 坂の上に球体を配置
+            const xPos = 0;
+            const zPos = -5; // 坂の上部
+            const yPos = startHeight * Math.sin(radians) + radius + 0.1; // 球体が坂の上に乗るように
+            
+            sphereBody = new CANNON.Body({
+                mass: 5, // 質量を設定
+                position: new CANNON.Vec3(xPos, yPos, zPos),
+                shape: sphereShape
+            });
+            
+            // 摩擦係数を設定
+            const friction = parseFloat(document.getElementById('friction').value);
+            sphereBody.material = new CANNON.Material();
+            sphereBody.material.friction = friction;
+            
+            // 回転の減衰を小さくして、よく回転するようにする
+            sphereBody.angularDamping = 0.1;
+            
+            world.addBody(sphereBody);
+        }
+        
+        // シーン、カメラ、レンダラーの設定
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+        
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // カメラの位置を上げて、オブジェクトが画面の真ん中に来るようにする
+        camera.position.set(0, 2, 5);
+        camera.lookAt(0, 0, 0);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+        
+        // 環境光と指向性ライトを追加
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        scene.add(ambientLight);
+        
+        const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight1.position.set(1, 1, 1);
+        scene.add(directionalLight1);
+        
+        const directionalLight2 = new THREE.DirectionalLight(0x8080ff, 0.5);
+        directionalLight2.position.set(-1, -1, -1);
+        scene.add(directionalLight2);
+        
+        // 迷彩テクスチャを生成
+        function generateCamouflageTexture() {
+            const canvas = document.getElementById('texture-canvas');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            
+            // キャンバスをクリア
+            ctx.clearRect(0, 0, width, height);
+            
+            // 背景色を設定
+            ctx.fillStyle = '#4a773e'; // 暗い緑色
+            ctx.fillRect(0, 0, width, height);
+            
+            // 迷彩パターンの色
+            const colors = [
+                '#2d4f2a', // 濃い緑
+                '#6b8e5c', // 明るい緑
+                '#a9b080', // オリーブ
+                '#3a3321'  // 茶色
+            ];
+            
+            // 大きな斑点を描画
+            for (let i = 0; i < 20; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const radius = 30 + Math.random() * 70;
+                
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.ellipse(x, y, radius, radius * 0.7, Math.random() * Math.PI * 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 中くらいの斑点を描画
+            for (let i = 0; i < 50; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const radius = 10 + Math.random() * 30;
+                
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.ellipse(x, y, radius, radius * 0.7, Math.random() * Math.PI * 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 小さな斑点を描画
+            for (let i = 0; i < 100; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const radius = 2 + Math.random() * 8;
+                
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.ellipse(x, y, radius, radius * 0.7, Math.random() * Math.PI * 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+        
+        // 石灯籠テクスチャを生成
+        function generateStoneTexture() {
+            const canvas = document.getElementById('texture-canvas');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+            
+            // 背景色を設定（石灯籠の基本色）
+            ctx.fillStyle = '#a8a8a8'; // 灰色
+            ctx.fillRect(0, 0, width, height);
+            
+            // 石の質感を表現するための色
+            const colors = [
+                '#8a8a8a', // 暗い灰色
+                '#b8b8b8', // 明るい灰色
+                '#989898', // 中間の灰色
+                '#707070'  // より暗い灰色
+            ];
+            
+            // 大きな石の質感を描画
+            for (let i = 0; i < 30; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const radius = 20 + Math.random() * 50;
+                
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.ellipse(x, y, radius, radius * 0.8, Math.random() * Math.PI * 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 中くらいの石の質感を描画
+            for (let i = 0; i < 100; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const radius = 5 + Math.random() * 15;
+                
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.ellipse(x, y, radius, radius * 0.8, Math.random() * Math.PI * 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 小さな凹凸を描画
+            for (let i = 0; i < 500; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const radius = 1 + Math.random() * 3;
+                
+                ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+                ctx.beginPath();
+                ctx.ellipse(x, y, radius, radius, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 亀裂や傷を描画
+            for (let i = 0; i < 20; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                const length = 10 + Math.random() * 30;
+                const angle = Math.random() * Math.PI * 2;
+                
+                ctx.strokeStyle = '#606060';
+                ctx.lineWidth = 0.5 + Math.random();
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(
+                    x + Math.cos(angle) * length,
+                    y + Math.sin(angle) * length
+                );
+                ctx.stroke();
+            }
+            
+            // ノイズを追加してザラザラ感を強調
+            for (let i = 0; i < 10000; i++) {
+                const x = Math.random() * width;
+                const y = Math.random() * height;
+                
+                ctx.fillStyle = `rgba(0, 0, 0, ${Math.random() * 0.1})`;
+                ctx.fillRect(x, y, 1, 1);
+            }
+            
+            return new THREE.CanvasTexture(canvas);
+        }
+        
+        // テクスチャを生成
+        const stoneTexture = generateStoneTexture();
+        const camouflageTexture = generateCamouflageTexture();
+        
+        // マテリアルを作成
+        let material = new THREE.MeshPhongMaterial({
+            map: stoneTexture,
+            shininess: 30,
+            specular: 0x222222,
+            bumpScale: 0.05
+        });
+        
+        // 球体のジオメトリを作成
+        const geometry = new THREE.SphereGeometry(1, 64, 64);
+        
+        // 球体メッシュを作成
+        let sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
+        
+        // 現在のモデル（デフォルトは球体）
+        let currentModel = sphere;
+        let originalModel = null; // オリジナルのモデルを保存
+        let modelPivot = new THREE.Group(); // モデルのピボットポイント
+        scene.add(modelPivot);
+        
+        // 背景に星空を追加
+        const starGeometry = new THREE.BufferGeometry();
+        const starCount = 1000;
+        const starPositions = new Float32Array(starCount * 3);
+        
+        for (let i = 0; i < starCount * 3; i += 3) {
+            starPositions[i] = (Math.random() - 0.5) * 100;
+            starPositions[i + 1] = (Math.random() - 0.5) * 100;
+            starPositions[i + 2] = (Math.random() - 0.5) * 100;
+        }
+        
+        starGeometry.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        
+        const starMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.1,
+            transparent: true
+        });
+        
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
+        
+        // マウスによる回転制御
+        let isDragging = false;
+        let previousMousePosition = {
+            x: 0,
+            y: 0
+        };
+        
+        document.addEventListener('mousedown', function(e) {
+            isDragging = true;
+        });
+        
+        document.addEventListener('mousemove', function(e) {
+            const deltaMove = {
+                x: e.clientX - previousMousePosition.x,
+                y: e.clientY - previousMousePosition.y
+            };
+            
+            if (isDragging) {
+                const deltaRotationQuaternion = new THREE.Quaternion()
+                    .setFromEuler(new THREE.Euler(
+                        toRadians(deltaMove.y * 0.5),
+                        toRadians(deltaMove.x * 0.5),
+                        0,
+                        'XYZ'
+                    ));
+                
+                modelPivot.quaternion.multiplyQuaternions(deltaRotationQuaternion, modelPivot.quaternion);
+            }
+            
+            previousMousePosition = {
+                x: e.clientX,
+                y: e.clientY
+            };
+        });
+        
+        document.addEventListener('mouseup', function(e) {
+            isDragging = false;
+        });
+        
+        // ズーム制御
+        document.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            
+            if (e.deltaY < 0) {
+                camera.position.z -= 0.2;
+            } else {
+                camera.position.z += 0.2;
+            }
+            
+            // 最小・最大ズーム制限
+            camera.position.z = Math.max(2, Math.min(10, camera.position.z));
+        });
+        
+        function toRadians(angle) {
+            return angle * (Math.PI / 180);
+        }
+        
+        function toDegrees(angle) {
+            return angle * (180 / Math.PI);
+        }
+        
+        // 回転アニメーションの設定
+        let isRotating = true;
+        // 1秒1回転の回転速度（2π/60 ≈ 0.1047）
+        const rotationSpeed = Math.PI * 2 / 60;
+        
+        
+        // コントロールの設定
+        document.getElementById('texture-type').addEventListener('change', updateTexture);
+        document.getElementById('color').addEventListener('input', updateColor);
+        document.getElementById('wireframe').addEventListener('change', updateWireframe);
+        document.getElementById('toggleRotation').addEventListener('click', toggleRotation);
+        document.getElementById('resetCamera').addEventListener('click', resetCamera);
+        document.getElementById('tiltModelY').addEventListener('click', tiltModelY);
+        document.getElementById('tiltModelX').addEventListener('click', tiltModelX);
+        document.getElementById('rotationY').addEventListener('input', updateRotationY);
+        document.getElementById('rotationX').addEventListener('input', updateRotationX);
+        
+        // 物理シミュレーションのコントロール
+        /*document.getElementById('startSimulation').addEventListener('click', startSimulation);
+        document.getElementById('resetSimulation').addEventListener('click', resetSimulation);
+        document.getElementById('slopeAngle').addEventListener('input', updateSlopeAngle);
+        document.getElementById('friction').addEventListener('input', updateFriction);
+        
+        // 物理シミュレーションのコントロール
+        document.getElementById('startSimulation').addEventListener('click', startSimulation);
+        document.getElementById('resetSimulation').addEventListener('click', resetSimulation);
+        document.getElementById('slopeAngle').addEventListener('input', updateSlopeAngle);
+        document.getElementById('friction').addEventListener('input', updateFriction);*/
+        
+        function updateTexture() {
+            const textureType = document.getElementById('texture-type').value;
+            
+            if (textureType === 'stone') {
+                material.map = stoneTexture;
+                material.color.set(0xffffff); // 白色（テクスチャの色を活かす）
+                material.shininess = 30;
+                material.specular.set(0x222222);
+                material.wireframe = false;
+                material.needsUpdate = true;
+            } else if (textureType === 'camouflage') {
+                material.map = camouflageTexture;
+                material.color.set(0xffffff); // 白色（テクスチャの色を活かす）
+                material.shininess = 50;
+                material.specular.set(0x333333);
+                material.wireframe = false;
+                material.needsUpdate = true;
+            } else if (textureType === 'solid') {
+                material.map = null;
+                material.color.set(document.getElementById('color').value);
+                material.wireframe = false;
+                material.needsUpdate = true;
+            } else if (textureType === 'wireframe') {
+                material.map = null;
+                material.color.set(document.getElementById('color').value);
+                material.wireframe = true;
+                material.needsUpdate = true;
+            }
+        }
+        
+        function updateColor() {
+            const color = document.getElementById('color').value;
+            const textureType = document.getElementById('texture-type').value;
+            
+            if (textureType !== 'camouflage') {
+                material.color.set(color);
+            }
+        }
+        
+        function updateWireframe() {
+            const wireframe = document.getElementById('wireframe').checked;
+            material.wireframe = wireframe;
+        }
+        
+        function toggleRotation() {
+            isRotating = !isRotating;
+        }
+        
+        function resetCamera() {
+            // カメラの位置を上げて、オブジェクトが画面の真ん中に来るようにする
+            camera.position.set(0, 2, 5);
+            camera.lookAt(0, 0, 0);
+        }
+        
+        function tiltModelY() {
+            // Y軸に25度傾ける
+            modelPivot.rotation.y = toRadians(25);
+            document.getElementById('rotationY').value = 25;
+            document.getElementById('rotationYValue').textContent = '25°';
+        }
+        
+        function tiltModelX() {
+            // X軸に25度傾ける
+            modelPivot.rotation.x = toRadians(25);
+            document.getElementById('rotationX').value = 25;
+            document.getElementById('rotationXValue').textContent = '25°';
+        }
+        
+        function updateRotationY() {
+            const angle = parseInt(document.getElementById('rotationY').value);
+            modelPivot.rotation.y = toRadians(angle);
+            document.getElementById('rotationYValue').textContent = angle + '°';
+        }
+        
+        function updateRotationX() {
+            const angle = parseInt(document.getElementById('rotationX').value);
+            modelPivot.rotation.x = toRadians(angle);
+            document.getElementById('rotationXValue').textContent = angle + '°';
+        }
+        
+        // GLBファイルのアップロード処理
+        document.getElementById('file-input').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            // ファイル名を表示
+            document.getElementById('file-name').textContent = file.name;
+            document.getElementById('model-name').textContent = 'モデル: ' + file.name;
+            document.getElementById('model-info').style.display = 'block';
+            
+            // エラーメッセージをクリア
+            const errorElement = document.getElementById('error-message');
+            errorElement.style.display = 'none';
+            
+            // ローディング表示
+            document.getElementById('loading').style.display = 'block';
+            
+            // GLTFLoaderを動的に読み込む
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+            script.onload = function() {
+                // DRACOLoaderを動的に読み込む
+                const dracoScript = document.createElement('script');
+                dracoScript.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js';
+                dracoScript.onload = function() {
+                    loadGLBFile(file);
+                };
+                document.head.appendChild(dracoScript);
+            };
+            document.head.appendChild(script);
+        });
+        
+        function loadGLBFile(file) {
+            const reader = new FileReader();
+            
+            reader.onload = function(event) {
+                const arrayBuffer = event.target.result;
+                
+                try {
+                    // DRACOローダーの設定
+                    const dracoLoader = new THREE.DRACOLoader();
+                    dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/');
+                    
+                    // GLTFローダーの設定
+                    const loader = new THREE.GLTFLoader();
+                    loader.setDRACOLoader(dracoLoader);
+                    
+                    // ArrayBufferからモデルを読み込む
+                    loader.parse(arrayBuffer, '', function(gltf) {
+                        // 現在のモデルをシーンから削除
+                        scene.remove(currentModel);
+                        modelPivot.remove(originalModel);
+                        
+                        // 新しいモデルを設定
+                        const model = gltf.scene;
+                        originalModel = model;
+                        
+                        // モデルのサイズを調整
+                        const box = new THREE.Box3().setFromObject(model);
+                        const size = box.getSize(new THREE.Vector3()).length();
+                        const center = box.getCenter(new THREE.Vector3());
+                        
+                        // モデルを中央に配置
+                        model.position.x = -center.x;
+                        model.position.y = -center.y;
+                        model.position.z = -center.z;
+                        
+                        // モデルの根本（下部）を起点にする
+                        const bottomY = box.min.y;
+                        model.position.y -= bottomY;
+                        
+                        // モデルのマテリアルをテクスチャに変更
+                        model.traverse(function(child) {
+                            if (child.isMesh) {
+                                const textureType = document.getElementById('texture-type').value;
+                                let textureMap;
+                                
+                                if (textureType === 'stone') {
+                                    textureMap = stoneTexture;
+                                } else if (textureType === 'camouflage') {
+                                    textureMap = camouflageTexture;
+                                } else {
+                                    textureMap = null;
+                                }
+                                
+                                child.material = new THREE.MeshPhongMaterial({
+                                    map: textureMap,
+                                    shininess: textureType === 'stone' ? 30 : 50,
+                                    specular: textureType === 'stone' ? 0x222222 : 0x333333,
+                                    color: textureMap ? 0xffffff : document.getElementById('color').value,
+                                    wireframe: textureType === 'wireframe'
+                                });
+                            }
+                        });
+                        
+                        // モデルをピボットグループに追加
+                        modelPivot.add(model);
+                        modelPivot.position.set(0, 0, 0);
+                        modelPivot.rotation.set(0, 0, 0);
+                        
+                        // カメラの位置を調整
+                        camera.position.set(0, size, size * 2);
+                        camera.lookAt(0, 0, 0);
+                        
+                        // ローディング表示を非表示にする
+                        document.getElementById('loading').style.display = 'none';
+                        
+                        // 特定のファイル名の場合、自動的に傾ける
+                        if (file.name === 'Zen_Lantern_in_Garden_0426020614_texture.glb') {
+                            tiltModelX(); // X軸に25度傾ける
+                        }
+                    }, function(error) {
+                        console.error('GLBファイルの解析に失敗しました:', error);
+                        document.getElementById('loading').style.display = 'none';
+                        const errorElement = document.getElementById('error-message');
+                        errorElement.textContent = 'GLBファイルの解析に失敗しました。';
+                        errorElement.style.display = 'block';
+                    });
+                } catch (error) {
+                    console.error('GLBファイルの読み込みに失敗しました:', error);
+                    document.getElementById('loading').style.display = 'none';
+                    const errorElement = document.getElementById('error-message');
+                    errorElement.textContent = 'GLBファイルの読み込みに失敗しました。';
+                    errorElement.style.display = 'block';
+                }
+            };
+            
+            reader.onerror = function() {
+                console.error('ファイルの読み込みに失敗しました');
+                document.getElementById('loading').style.display = 'none';
+                const errorElement = document.getElementById('error-message');
+                errorElement.textContent = 'ファイルの読み込みに失敗しました。';
+                errorElement.style.display = 'block';
+            };
+            
+            // ファイルをArrayBufferとして読み込む
+            reader.readAsArrayBuffer(file);
+        }
+        
+        // ウィンドウのリサイズ処理
+        window.addEventListener('resize', function () {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (isRotating && !isDragging) {
+                modelPivot.rotation.y += rotationSpeed;
+                const angleY = toDegrees(modelPivot.rotation.y) % 360;
+                document.getElementById('rotationY').value = angleY;
+                document.getElementById('rotationYValue').textContent = Math.round(angleY) + '°';
+                
+                const angleX = toDegrees(modelPivot.rotation.x) % 360;
+                document.getElementById('rotationX').value = angleX;
+                document.getElementById('rotationXValue').textContent = Math.round(angleX) + '°';
+            }
+            
+            // 物理シミュレーションの更新
+            /*if (isSimulationRunning && world && sphereBody) {
+                // 物理世界を更新
+                world.step(timeStep);
+                
+                // 球体の位置と回転を更新
+                sphere.position.copy(new THREE.Vector3(
+                    sphereBody.position.x,
+                    sphereBody.position.y,
+                    sphereBody.position.z
+                ));
+                
+                // 球体の回転を更新
+                sphere.quaternion.copy(new THREE.Quaternion(
+                    sphereBody.quaternion.x,
+                    sphereBody.quaternion.y,
+                    sphereBody.quaternion.z,
+                    sphereBody.quaternion.w
+                ));
+                
+                // 球体が一定以下に落ちたらリセット
+                if (sphereBody.position.y < -10) {
+                    resetSimulation();
+                }
+            }*/
+            
+            renderer.render(scene, camera);
+        }
+        
+        animate();
+    </script>
+</body>
+</html>
