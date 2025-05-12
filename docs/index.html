@@ -893,6 +893,17 @@
             // ローディング表示
             document.getElementById('loading').style.display = 'block';
             
+            // 球体をピボットグループに追加（デフォルトモデルとして）
+            if (!originalModel) {
+                originalModel = sphere;
+                modelPivot.add(sphere);
+                scene.remove(sphere);
+            }
+            
+            // モデル情報を表示
+            document.getElementById('model-name').textContent = 'モデル: デフォルト球体';
+            document.getElementById('model-info').style.display = 'block';
+            
             // DRACOローダーの設定
             const dracoLoader = new THREE.DRACOLoader();
             dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/');
@@ -906,7 +917,6 @@
                 modelPath,
                 function(gltf) {
                     // 現在のモデルをシーンから削除
-                    scene.remove(currentModel);
                     modelPivot.remove(originalModel);
                     
                     // 新しいモデルを設定
@@ -969,6 +979,8 @@
                     
                     // X軸に25度傾ける
                     tiltModelX();
+                    
+                    console.log('GLBモデルを正常に読み込みました');
                 },
                 function(xhr) {
                     // 読み込み進捗の処理（必要に応じて）
@@ -978,7 +990,7 @@
                     console.error('GLBファイルの読み込みに失敗しました:', error);
                     document.getElementById('loading').style.display = 'none';
                     const errorElement = document.getElementById('error-message');
-                    errorElement.textContent = 'デフォルトモデルの読み込みに失敗しました。';
+                    errorElement.textContent = 'デフォルトモデルの読み込みに失敗しました。モデルファイルを _model/Zen_Lantern_in_Garden_0425152153_texture_fbx/ ディレクトリに配置してください。';
                     errorElement.style.display = 'block';
                 }
             );
