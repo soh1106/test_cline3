@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>転がる石灯籠</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000000;
+            font-family: sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 10px;
+            font-size: 14px;
+            border-radius: 4px;
+        }
+        #controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            padding: 10px;
+            font-size: 14px;
+            border-radius: 4px;
+            width: 250px;
+        }
+        #controls button {
+            margin: 5px;
+            padding: 5px 10px;
+            background: #4a90e2;
+            border: none;
+            border-radius: 3px;
+            color: white;
+            cursor: pointer;
+        }
+        #controls button:hover {
+            background: #357ae8;
+        }
+        #controls input {
+            margin: 5px 0;
+        }
+        .control-group {
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-bottom: 3px;
+        }
+        .slider-container {
+            margin-top: 10px;
+        }
+        .slider-container label {
+            display: flex;
+            justify-content: space-between;
+        }
+        .slider-container label span {
+            font-size: 12px;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">転がる石灯籠 - ドラッグ: 回転 | スクロール: ズーム</div>
+    <div id="controls">
+        <div class="control-group">
+            <h3 style="margin-top: 0;">転がる石灯籠</h3>
+        </div>
+        <hr>
+        <div class="control-group">
+            <button id="resetSimulation">シミュレーションリセット</button>
+        </div>
+        <div class="control-group slider-container">
+            <label for="slopeAngle">坂の角度: <span id="slopeAngleValue">20°</span></label>
+            <input type="range" id="slopeAngle" min="5" max="45" value="20" step="1">
+        </div>
+        <div class="control-group">
+            <label for="friction">摩擦係数: <span id="frictionValue">0.1</span></label>
+            <input type="range" id="friction" min="0" max="1" value="0.1" step="0.05">
+        </div>
+        <div class="control-group">
+            <button id="resetCamera">カメラリセット</button>
+        </div>
+    </div>
+    <div id="loading">モデルを読み込み中...</div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <script>
+        // 物理世界の設定
+        let world;
+        let modelBody;  // GLBモデル用の物理ボディ
+        let groundBody;
+        let slopeBody;
+        let slopeMesh;
+        let timeStep = 1/60;
+        let isSimulationRunning = true;
+        let lanternModel = null;
+        let modelPivot = null;
+        
+        // シーン、カメラ、レンダラーの設定
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // 空色の背景
+        
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 15);
+        camera.lookAt(0, 0, 0);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+        
+        // OrbitControlsを追加
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        
+        // 環境光と指向性ライトを追加
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+        
+        // 地面を作成
+        const groundGeometry = new THREE.PlaneGeometry(100, 100);
+        const groundMaterial = new THREE.MeshStandardMaterial({
+            color: 0x7CFC00,
+            roughness: 0.8,
+            metalness: 0.2
+        });
+        const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+        groundMesh.rotation.x = -Math.PI / 2;
+        groundMesh.position.y = -2;
+        groundMesh.receiveShadow = true;
+        scene.add(groundMesh);
+        
+        // 物理世界を初期化
+        function initPhysics() {
+            // 物理世界を作成
+            world = new CANNON.World();
+            world.gravity.set(0, -9.82, 0); // 重力を設定
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+            
+            // 地面の物理ボディを作成
+            const groundShape = new CANNON.Plane();
+            groundBody = new CANNON.Body({
+                mass: 0, // 質量0で固定
+                position: new CANNON.Vec3(0, -2, 0),
+                shape: groundShape
+            });
+            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2); // 地面を水平にする
+            world.addBody(groundBody);
+            
+            // 坂の物理ボディを作成
+            createSlope();
+        }
+        
+        function createSlope() {
+            // 既存の坂を削除
+            if (slopeMesh) {
+                scene.remove(slopeMesh);
+            }
+            if (slopeBody) {
+                world.removeBody(slopeBody);
+            }
+            
+            // 坂の角度を取得
+            const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
+            const radians = toRadians(slopeAngle);
+            
+            // 坂のサイズ
+            const slopeWidth = 10;
+            const slopeHeight = 0.2;
+            const slopeDepth = 20;
+            
+            // Three.jsの坂メッシュを作成
+            const slopeGeometry = new THREE.BoxGeometry(slopeWidth, slopeHeight, slopeDepth);
+            const slopeMaterial = new THREE.MeshStandardMaterial({
+                color: 0xA0522D,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            slopeMesh = new THREE.Mesh(slopeGeometry, slopeMaterial);
+            slopeMesh.castShadow = true;
+            slopeMesh.receiveShadow = true;
+            
+            // 坂の位置と回転を設定
+            slopeMesh.position.set(0, 0, 0);
+            slopeMesh.rotation.x = radians;
+            scene.add(slopeMesh);
+            
+            // 坂の物理ボディを作成
+            const slopeShape = new CANNON.Box(new CANNON.Vec3(slopeWidth/2, slopeHeight/2, slopeDepth/2));
+            slopeBody = new CANNON.Body({
+                mass: 0, // 質量0で固定
+                position: new CANNON.Vec3(0, 0, 0),
+                shape: slopeShape
+            });
+            
+            // 摩擦係数を設定
+            const friction = parseFloat(document.getElementById('friction').value);
+            slopeBody.material = new CANNON.Material();
+            slopeBody.material.friction = friction;
+            
+            // 坂の回転を設定
+            slopeBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), radians);
+            world.addBody(slopeBody);
+            
+            // モデルが既に読み込まれている場合は、物理ボディを再作成
+            if (lanternModel) {
+                createModelBody();
+            }
+        }
+        
+        function createModelBody() {
+            // 既存の物理ボディを削除
+            if (modelBody) {
+                world.removeBody(modelBody);
+            }
+            
+            // モデルのサイズを取得
+            const box = new THREE.Box3().setFromObject(lanternModel);
+            const size = box.getSize(new THREE.Vector3());
+            
+            // モデルの形状を近似するためのボックス形状を使用
+            const boxSize = new CANNON.Vec3(
+                size.x / 2,  // 幅の半分
+                size.y / 2,  // 高さの半分
+                size.z / 2   // 奥行きの半分
+            );
+            const modelShape = new CANNON.Box(boxSize);
+            
+            // 坂の角度に基づいてモデルの初期位置を計算
+            const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
+            const radians = toRadians(slopeAngle);
+            const startHeight = 8; // 坂の上部からの高さ
+            
+            // 坂の上にモデルを配置
+            const xPos = 0;
+            const zPos = -8; // 坂の上部
+            const yPos = startHeight * Math.sin(radians) + boxSize.y + 0.1; // モデルが坂の上に乗るように
+            
+            modelBody = new CANNON.Body({
+                mass: 5, // 質量を設定
+                position: new CANNON.Vec3(xPos, yPos, zPos),
+                shape: modelShape
+            });
+            
+            // 摩擦係数を設定
+            const friction = parseFloat(document.getElementById('friction').value);
+            modelBody.material = new CANNON.Material();
+            modelBody.material.friction = friction;
+            
+            // 回転の減衰を小さくして、よく回転するようにする
+            modelBody.angularDamping = 0.1;
+            
+            // 初期回転を設定（横倒しにする）
+            modelBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+            
+            world.addBody(modelBody);
+            
+            // モデルの位置と回転を初期化
+            modelPivot.position.copy(new THREE.Vector3(
+                modelBody.position.x,
+                modelBody.position.y,
+                modelBody.position.z
+            ));
+            
+            modelPivot.quaternion.copy(new THREE.Quaternion(
+                modelBody.quaternion.x,
+                modelBody.quaternion.y,
+                modelBody.quaternion.z,
+                modelBody.quaternion.w
+            ));
+        }
+        
+        // GLBモデルを読み込む
+        function loadModel() {
+            // いくつかのパスを試してみる
+            const possiblePaths = [
+                '_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
+                '../_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
+                '../docs/_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
+                './docs/_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
+                '/docs/_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
+                'https://raw.githubusercontent.com/soh1106/test_cline3/main/docs/_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb'
+            ];
+            
+            let modelPath = possiblePaths[0];
+            let pathIndex = 0;
+            
+            function tryLoadModel() {
+                console.log('モデルの読み込みを試行:', modelPath);
+                
+                // DRACOローダーの設定
+                const dracoLoader = new THREE.DRACOLoader();
+                dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/');
+                
+                // GLTFローダーの設定
+                const loader = new THREE.GLTFLoader();
+                loader.setDRACOLoader(dracoLoader);
+            
+            // モデルを読み込む
+            loader.load(
+                modelPath,
+                function(gltf) {
+                    // モデルを取得
+                    lanternModel = gltf.scene;
+                    
+                    // モデルのサイズを調整
+                    const box = new THREE.Box3().setFromObject(lanternModel);
+                    const size = box.getSize(new THREE.Vector3()).length();
+                    const center = box.getCenter(new THREE.Vector3());
+                    
+                    // モデルを中央に配置
+                    lanternModel.position.x = -center.x;
+                    lanternModel.position.y = -center.y;
+                    lanternModel.position.z = -center.z;
+                    
+                    // モデルの根本（下部）を起点にする
+                    const bottomY = box.min.y;
+                    lanternModel.position.y -= bottomY;
+                    
+                    // シャドウを有効化
+                    lanternModel.traverse(function(child) {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    
+                    // モデルをピボットグループに追加
+                    modelPivot = new THREE.Group();
+                    modelPivot.add(lanternModel);
+                    scene.add(modelPivot);
+                    
+                    // 物理ボディを作成
+                    createModelBody();
+                    
+                    // ローディング表示を非表示にする
+                    document.getElementById('loading').style.display = 'none';
+                    
+                    console.log('GLBモデルを正常に読み込みました');
+                },
+                function(xhr) {
+                    // 読み込み進捗の処理
+                    console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+                },
+                function(error) {
+                    console.error('GLBファイルの読み込みに失敗しました:', error);
+                    
+                    // 次のパスを試す
+                    pathIndex++;
+                    if (pathIndex < possiblePaths.length) {
+                        modelPath = possiblePaths[pathIndex];
+                        console.log('次のパスを試行:', modelPath);
+                        tryLoadModel();
+                    } else {
+                        // 最後の手段として、デフォルトの箱を表示
+                        console.error('すべてのパスでモデルの読み込みに失敗しました。代わりに箱を表示します。');
+                        createDefaultBox();
+                        
+                        // ローディング表示を非表示にする
+                        document.getElementById('loading').style.display = 'none';
+                    }
+                }
+            );
+            }
+            
+            // 最初のパスで読み込みを開始
+            tryLoadModel();
+        }
+        
+        // デフォルトの箱を作成する関数
+        function createDefaultBox() {
+            // 箱のジオメトリを作成
+            const geometry = new THREE.BoxGeometry(1, 2, 1);
+            const material = new THREE.MeshStandardMaterial({
+                color: 0xA0522D,
+                roughness: 0.7,
+                metalness: 0.3
+            });
+            
+            // メッシュを作成
+            lanternModel = new THREE.Mesh(geometry, material);
+            lanternModel.castShadow = true;
+            lanternModel.receiveShadow = true;
+            
+            // モデルをピボットグループに追加
+            modelPivot = new THREE.Group();
+            modelPivot.add(lanternModel);
+            scene.add(modelPivot);
+            
+            // 物理ボディを作成
+            createModelBody();
+            
+            console.log('デフォルトの箱を作成しました');
+        }
+        
+        // 角度変換関数
+        function toRadians(angle) {
+            return angle * (Math.PI / 180);
+        }
+        
+        function toDegrees(angle) {
+            return angle * (180 / Math.PI);
+        }
+        
+        // イベントリスナーを設定
+        document.getElementById('resetSimulation').addEventListener('click', function() {
+            // モデルが読み込まれている場合のみ実行
+            if (lanternModel) {
+                createModelBody();
+            }
+        });
+        
+        document.getElementById('slopeAngle').addEventListener('input', function() {
+            const angle = parseFloat(this.value);
+            document.getElementById('slopeAngleValue').textContent = angle + '°';
+            createSlope();
+        });
+        
+        document.getElementById('friction').addEventListener('input', function() {
+            const friction = parseFloat(this.value);
+            document.getElementById('frictionValue').textContent = friction.toFixed(2);
+            
+            if (slopeBody) {
+                slopeBody.material.friction = friction;
+            }
+            
+            if (modelBody) {
+                modelBody.material.friction = friction;
+            }
+        });
+        
+        document.getElementById('resetCamera').addEventListener('click', function() {
+            camera.position.set(0, 5, 15);
+            camera.lookAt(0, 0, 0);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        });
+        
+        // ウィンドウのリサイズ処理
+        window.addEventListener('resize', function () {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // OrbitControlsの更新
+            controls.update();
+            
+            // 物理シミュレーションの更新
+            if (isSimulationRunning && world && modelBody && lanternModel) {
+                // 物理世界を更新
+                world.step(timeStep);
+                
+                // モデルの位置と回転を更新
+                modelPivot.position.copy(new THREE.Vector3(
+                    modelBody.position.x,
+                    modelBody.position.y,
+                    modelBody.position.z
+                ));
+                
+                // モデルの回転を更新
+                modelPivot.quaternion.copy(new THREE.Quaternion(
+                    modelBody.quaternion.x,
+                    modelBody.quaternion.y,
+                    modelBody.quaternion.z,
+                    modelBody.quaternion.w
+                ));
+                
+                // モデルが一定以下に落ちたらリセット
+                if (modelBody.position.y < -10) {
+                    createModelBody();
+                }
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // 初期化と実行
+        initPhysics();
+        loadModel();
+        animate();
+    </script>
+</body>
+</html>

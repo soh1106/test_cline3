@@ -171,14 +171,18 @@
             <h3>物理シミュレーション</h3>
             <button id="startSimulation">シミュレーション開始</button>
             <button id="resetSimulation">リセット</button>
+            <div style="margin-top: 10px;">
+                <input type="checkbox" id="autoStartSimulation" checked>
+                <label for="autoStartSimulation">モデル読み込み後に自動開始</label>
+            </div>
         </div>
         <div class="control-group slider-container">
-            <label for="slopeAngle">坂の角度: <span id="slopeAngleValue">15°</span></label>
-            <input type="range" id="slopeAngle" min="0" max="45" value="15" step="1">
+            <label for="slopeAngle">坂の角度: <span id="slopeAngleValue">20°</span></label>
+            <input type="range" id="slopeAngle" min="0" max="45" value="20" step="1">
         </div>
         <div class="control-group">
-            <label for="friction">摩擦係数: <span id="frictionValue">0.3</span></label>
-            <input type="range" id="friction" min="0" max="1" value="0.3" step="0.05">
+            <label for="friction">摩擦係数: <span id="frictionValue">0.1</span></label>
+            <input type="range" id="friction" min="0" max="1" value="0.1" step="0.05">
         </div>
     </div>
     <div id="loading">モデルを読み込み中...</div>
@@ -192,7 +196,7 @@
     <script>
         // 物理世界の設定
         let world;
-        let sphereBody;
+        let modelBody;  // GLBモデル用の物理ボディ
         let groundBody;
         let slopeBody;
         let slopeMesh;
@@ -219,8 +223,8 @@
             // 坂の物理ボディを作成
             createSlope();
             
-            // 球体の物理ボディを作成
-            createSphereBody();
+            // モデルの物理ボディを作成
+            createModelBody();
         }
         
         function createSlope() {
@@ -273,36 +277,51 @@
             world.addBody(slopeBody);
         }
         
-        function createSphereBody() {
-            // 球体の物理ボディを作成
-            const radius = 1;
-            const sphereShape = new CANNON.Sphere(radius);
+        function createModelBody() {
+            // モデルの物理ボディを作成
+            if (!originalModel) return;
             
-            // 坂の角度に基づいて球体の初期位置を計算
+            // モデルのサイズを取得
+            const box = new THREE.Box3().setFromObject(originalModel);
+            const size = box.getSize(new THREE.Vector3());
+            
+            // モデルの形状を近似するためのボックス形状を使用
+            // 実際のモデルのサイズに基づいて調整
+            const boxSize = new CANNON.Vec3(
+                size.x / 2,  // 幅の半分
+                size.y / 2,  // 高さの半分
+                size.z / 2   // 奥行きの半分
+            );
+            const modelShape = new CANNON.Box(boxSize);
+            
+            // 坂の角度に基づいてモデルの初期位置を計算
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
             const startHeight = 5; // 坂の上部からの高さ
             
-            // 坂の上に球体を配置
+            // 坂の上にモデルを配置
             const xPos = 0;
             const zPos = -5; // 坂の上部
-            const yPos = startHeight * Math.sin(radians) + radius + 0.1; // 球体が坂の上に乗るように
+            const yPos = startHeight * Math.sin(radians) + boxSize.y + 0.1; // モデルが坂の上に乗るように
             
-            sphereBody = new CANNON.Body({
+            modelBody = new CANNON.Body({
                 mass: 5, // 質量を設定
                 position: new CANNON.Vec3(xPos, yPos, zPos),
-                shape: sphereShape
+                shape: modelShape
             });
             
             // 摩擦係数を設定
             const friction = parseFloat(document.getElementById('friction').value);
-            sphereBody.material = new CANNON.Material();
-            sphereBody.material.friction = friction;
+            modelBody.material = new CANNON.Material();
+            modelBody.material.friction = friction;
             
             // 回転の減衰を小さくして、よく回転するようにする
-            sphereBody.angularDamping = 0.1;
+            modelBody.angularDamping = 0.1;
             
-            world.addBody(sphereBody);
+            // 初期回転を設定（横倒しにする）
+            modelBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+            
+            world.addBody(modelBody);
         }
         
         // シーン、カメラ、レンダラーの設定
@@ -603,16 +622,65 @@
         document.getElementById('rotationX').addEventListener('input', updateRotationX);
         
         // 物理シミュレーションのコントロール
-        /*document.getElementById('startSimulation').addEventListener('click', startSimulation);
+        document.getElementById('startSimulation').addEventListener('click', startSimulation);
         document.getElementById('resetSimulation').addEventListener('click', resetSimulation);
         document.getElementById('slopeAngle').addEventListener('input', updateSlopeAngle);
         document.getElementById('friction').addEventListener('input', updateFriction);
         
-        // 物理シミュレーションのコントロール
-        document.getElementById('startSimulation').addEventListener('click', startSimulation);
-        document.getElementById('resetSimulation').addEventListener('click', resetSimulation);
-        document.getElementById('slopeAngle').addEventListener('input', updateSlopeAngle);
-        document.getElementById('friction').addEventListener('input', updateFriction);*/
+        // 物理シミュレーション関数
+        function startSimulation() {
+            if (!isSimulationRunning) {
+                isSimulationRunning = true;
+                // 自動回転を停止
+                isRotating = false;
+                
+                // 物理世界が初期化されていない場合は初期化
+                if (!world) {
+                    initPhysics();
+                }
+                
+                // カメラの位置を調整して坂全体が見えるようにする
+                camera.position.set(0, 3, 8);
+                camera.lookAt(0, 0, 0);
+            }
+        }
+        
+        function resetSimulation() {
+            if (isSimulationRunning) {
+                isSimulationRunning = false;
+                
+                // モデルの位置と回転をリセット
+                modelPivot.position.set(0, 0, 0);
+                modelPivot.rotation.set(toRadians(parseFloat(document.getElementById('rotationX').value)),
+                                       toRadians(parseFloat(document.getElementById('rotationY').value)), 0);
+            }
+        }
+        
+        function updateSlopeAngle() {
+            const angle = parseFloat(document.getElementById('slopeAngle').value);
+            document.getElementById('slopeAngleValue').textContent = angle + '°';
+            
+            if (isSimulationRunning) {
+                // 坂を更新
+                createSlope();
+                // モデルの物理ボディを再作成
+                world.removeBody(modelBody);
+                createModelBody();
+            }
+        }
+        
+        function updateFriction() {
+            const friction = parseFloat(document.getElementById('friction').value);
+            document.getElementById('frictionValue').textContent = friction.toFixed(2);
+            
+            if (isSimulationRunning && modelBody) {
+                modelBody.material.friction = friction;
+            }
+            
+            if (isSimulationRunning && slopeBody) {
+                slopeBody.material.friction = friction;
+            }
+        }
         
         function updateTexture() {
             const textureType = document.getElementById('texture-type').value;
@@ -856,30 +924,39 @@
             }
             
             // 物理シミュレーションの更新
-            /*if (isSimulationRunning && world && sphereBody) {
+            if (isSimulationRunning && world && modelBody && originalModel) {
                 // 物理世界を更新
                 world.step(timeStep);
                 
-                // 球体の位置と回転を更新
-                sphere.position.copy(new THREE.Vector3(
-                    sphereBody.position.x,
-                    sphereBody.position.y,
-                    sphereBody.position.z
+                // モデルの位置と回転を更新
+                modelPivot.position.copy(new THREE.Vector3(
+                    modelBody.position.x,
+                    modelBody.position.y,
+                    modelBody.position.z
                 ));
                 
-                // 球体の回転を更新
-                sphere.quaternion.copy(new THREE.Quaternion(
-                    sphereBody.quaternion.x,
-                    sphereBody.quaternion.y,
-                    sphereBody.quaternion.z,
-                    sphereBody.quaternion.w
+                // モデルの回転を更新
+                modelPivot.quaternion.copy(new THREE.Quaternion(
+                    modelBody.quaternion.x,
+                    modelBody.quaternion.y,
+                    modelBody.quaternion.z,
+                    modelBody.quaternion.w
                 ));
                 
-                // 球体が一定以下に落ちたらリセット
-                if (sphereBody.position.y < -10) {
+                // モデルの回転角度をUIに反映
+                const angleY = toDegrees(modelPivot.rotation.y) % 360;
+                document.getElementById('rotationY').value = angleY;
+                document.getElementById('rotationYValue').textContent = Math.round(angleY) + '°';
+                
+                const angleX = toDegrees(modelPivot.rotation.x) % 360;
+                document.getElementById('rotationX').value = angleX;
+                document.getElementById('rotationXValue').textContent = Math.round(angleX) + '°';
+                
+                // モデルが一定以下に落ちたらリセット
+                if (modelBody.position.y < -10) {
                     resetSimulation();
                 }
-            }*/
+            }
             
             renderer.render(scene, camera);
         }
@@ -977,8 +1054,11 @@
                     document.getElementById('model-name').textContent = 'モデル: Zen_Lantern_in_Garden_0426020614_texture.glb';
                     document.getElementById('model-info').style.display = 'block';
                     
-                    // X軸に25度傾ける
+                    // X軸に25度傾ける（シミュレーション開始前の初期状態）
                     tiltModelX();
+                    
+                    // 物理世界を初期化
+                    initPhysics();
                     
                     console.log('GLBモデルを正常に読み込みました');
                 },
