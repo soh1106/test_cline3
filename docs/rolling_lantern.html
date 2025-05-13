@@ -473,9 +473,9 @@
         
         // イベントリスナーを設定
         document.getElementById('resetSimulation').addEventListener('click', function() {
-            // モデルが読み込まれている場合のみ実行
-            if (lanternModel) {
-                createModelBody();
+            // 灯籠が作成されている場合のみ実行
+            if (lanterns.length > 0) {
+                resetLanterns();
             }
         });
         
@@ -493,8 +493,11 @@
                 slopeBody.material.friction = friction;
             }
             
-            if (modelBody) {
-                modelBody.material.friction = friction;
+            // すべての灯籠の摩擦係数を更新
+            for (let i = 0; i < lanterns.length; i++) {
+                if (lanterns[i].body) {
+                    lanterns[i].body.material.friction = friction;
+                }
             }
         });
         
