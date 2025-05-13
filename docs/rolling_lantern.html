@@ -113,14 +113,15 @@
     <script>
         // 物理世界の設定
         let world;
-        let modelBody;  // GLBモデル用の物理ボディ
         let groundBody;
         let slopeBody;
         let slopeMesh;
         let timeStep = 1/60;
         let isSimulationRunning = true;
-        let lanternModel = null;
-        let modelPivot = null;
+        
+        // 複数の灯籠を管理する配列
+        const lanterns = [];
+        const lanternCount = 5; // 灯籠の数
         
         // シーン、カメラ、レンダラーの設定
         const scene = new THREE.Scene();
@@ -251,14 +252,10 @@
             }
         }
         
-        function createModelBody() {
-            // 既存の物理ボディを削除
-            if (modelBody) {
-                world.removeBody(modelBody);
-            }
-            
+        // 灯籠オブジェクトを作成する関数
+        function createLantern(model, index) {
             // モデルのサイズを取得
-            const box = new THREE.Box3().setFromObject(lanternModel);
+            const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
             
             // モデルの形状を近似するためのボックス形状を使用
@@ -274,12 +271,14 @@
             const radians = toRadians(slopeAngle);
             const startHeight = 8; // 坂の上部からの高さ
             
-            // 坂の上にモデルを配置
-            const xPos = 0;
-            const zPos = -8; // 坂の上部
+            // 坂の上にモデルを配置（少しずつずらして配置）
+            const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
+            const xPos = xOffset;
+            const zPos = -8 - index * 0.5; // 坂の上部（少しずつ奥にずらす）
             const yPos = startHeight * Math.sin(radians) + boxSize.y + 0.1; // モデルが坂の上に乗るように
             
-            modelBody = new CANNON.Body({
+            // 物理ボディを作成
+            const body = new CANNON.Body({
                 mass: 5, // 質量を設定
                 position: new CANNON.Vec3(xPos, yPos, zPos),
                 shape: modelShape
@@ -287,34 +286,63 @@
             
             // 摩擦係数を設定
             const friction = parseFloat(document.getElementById('friction').value);
-            modelBody.material = new CANNON.Material();
-            modelBody.material.friction = friction;
+            body.material = new CANNON.Material();
+            body.material.friction = friction;
             
             // 回転の減衰を小さくして、よく回転するようにする
-            modelBody.angularDamping = 0.1;
+            body.angularDamping = 0.1;
             
             // 初期回転を設定（横倒しにする）
-            modelBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+            body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
             
-            world.addBody(modelBody);
+            // 物理世界に追加
+            world.addBody(body);
+            
+            // モデルをピボットグループに追加
+            const pivot = new THREE.Group();
+            pivot.add(model);
+            scene.add(pivot);
             
             // モデルの位置と回転を初期化
-            modelPivot.position.copy(new THREE.Vector3(
-                modelBody.position.x,
-                modelBody.position.y,
-                modelBody.position.z
+            pivot.position.copy(new THREE.Vector3(
+                body.position.x,
+                body.position.y,
+                body.position.z
             ));
             
-            modelPivot.quaternion.copy(new THREE.Quaternion(
-                modelBody.quaternion.x,
-                modelBody.quaternion.y,
-                modelBody.quaternion.z,
-                modelBody.quaternion.w
+            pivot.quaternion.copy(new THREE.Quaternion(
+                body.quaternion.x,
+                body.quaternion.y,
+                body.quaternion.z,
+                body.quaternion.w
             ));
+            
+            // 灯籠オブジェクトを返す
+            return {
+                model: model,
+                body: body,
+                pivot: pivot
+            };
+        }
+        
+        // 既存の灯籠をリセットする関数
+        function resetLanterns() {
+            // すべての灯籠をリセット
+            for (let i = 0; i < lanterns.length; i++) {
+                const lantern = lanterns[i];
+                
+                // 物理ボディを削除
+                if (lantern.body) {
+                    world.removeBody(lantern.body);
+                }
+                
+                // 新しい灯籠を作成
+                lanterns[i] = createLantern(lantern.model, i);
+            }
         }
         
         // GLBモデルを読み込む
-        function loadModel() {
+        function loadModels() {
             // いくつかのパスを試してみる
             const possiblePaths = [
                 '_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
@@ -343,43 +371,42 @@
             loader.load(
                 modelPath,
                 function(gltf) {
-                    // モデルを取得
-                    lanternModel = gltf.scene;
-                    
-                    // モデルのサイズを調整
-                    const box = new THREE.Box3().setFromObject(lanternModel);
-                    const size = box.getSize(new THREE.Vector3()).length();
-                    const center = box.getCenter(new THREE.Vector3());
-                    
-                    // モデルを中央に配置
-                    lanternModel.position.x = -center.x;
-                    lanternModel.position.y = -center.y;
-                    lanternModel.position.z = -center.z;
-                    
-                    // モデルの根本（下部）を起点にする
-                    const bottomY = box.min.y;
-                    lanternModel.position.y -= bottomY;
-                    
-                    // シャドウを有効化
-                    lanternModel.traverse(function(child) {
-                        if (child.isMesh) {
-                            child.castShadow = true;
-                            child.receiveShadow = true;
-                        }
-                    });
-                    
-                    // モデルをピボットグループに追加
-                    modelPivot = new THREE.Group();
-                    modelPivot.add(lanternModel);
-                    scene.add(modelPivot);
-                    
-                    // 物理ボディを作成
-                    createModelBody();
-                    
                     // ローディング表示を非表示にする
                     document.getElementById('loading').style.display = 'none';
                     
                     console.log('GLBモデルを正常に読み込みました');
+                    
+                    // 複数の灯籠を作成
+                    for (let i = 0; i < lanternCount; i++) {
+                        // モデルをクローン
+                        const model = gltf.scene.clone();
+                        
+                        // モデルのサイズを調整
+                        const box = new THREE.Box3().setFromObject(model);
+                        const size = box.getSize(new THREE.Vector3()).length();
+                        const center = box.getCenter(new THREE.Vector3());
+                        
+                        // モデルを中央に配置
+                        model.position.x = -center.x;
+                        model.position.y = -center.y;
+                        model.position.z = -center.z;
+                        
+                        // モデルの根本（下部）を起点にする
+                        const bottomY = box.min.y;
+                        model.position.y -= bottomY;
+                        
+                        // シャドウを有効化
+                        model.traverse(function(child) {
+                            if (child.isMesh) {
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                            }
+                        });
+                        
+                        // 灯籠オブジェクトを作成して配列に追加
+                        const lantern = createLantern(model, i);
+                        lanterns.push(lantern);
+                    }
                 },
                 function(xhr) {
                     // 読み込み進捗の処理
@@ -397,7 +424,7 @@
                     } else {
                         // 最後の手段として、デフォルトの箱を表示
                         console.error('すべてのパスでモデルの読み込みに失敗しました。代わりに箱を表示します。');
-                        createDefaultBox();
+                        createDefaultBoxes();
                         
                         // ローディング表示を非表示にする
                         document.getElementById('loading').style.display = 'none';
@@ -411,27 +438,26 @@
         }
         
         // デフォルトの箱を作成する関数
-        function createDefaultBox() {
-            // 箱のジオメトリを作成
-            const geometry = new THREE.BoxGeometry(1, 2, 1);
-            const material = new THREE.MeshStandardMaterial({
-                color: 0xA0522D,
-                roughness: 0.7,
-                metalness: 0.3
-            });
-            
-            // メッシュを作成
-            lanternModel = new THREE.Mesh(geometry, material);
-            lanternModel.castShadow = true;
-            lanternModel.receiveShadow = true;
-            
-            // モデルをピボットグループに追加
-            modelPivot = new THREE.Group();
-            modelPivot.add(lanternModel);
-            scene.add(modelPivot);
-            
-            // 物理ボディを作成
-            createModelBody();
+        function createDefaultBoxes() {
+            // 複数の箱を作成
+            for (let i = 0; i < lanternCount; i++) {
+                // 箱のジオメトリを作成
+                const geometry = new THREE.BoxGeometry(1, 2, 1);
+                const material = new THREE.MeshStandardMaterial({
+                    color: 0xA0522D,
+                    roughness: 0.7,
+                    metalness: 0.3
+                });
+                
+                // メッシュを作成
+                const model = new THREE.Mesh(geometry, material);
+                model.castShadow = true;
+                model.receiveShadow = true;
+                
+                // 灯籠オブジェクトを作成して配列に追加
+                const lantern = createLantern(model, i);
+                lanterns.push(lantern);
+            }
             
             console.log('デフォルトの箱を作成しました');
         }
