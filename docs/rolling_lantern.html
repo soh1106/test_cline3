@@ -246,9 +246,9 @@
             slopeBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), radians);
             world.addBody(slopeBody);
             
-            // モデルが既に読み込まれている場合は、物理ボディを再作成
-            if (lanternModel) {
-                createModelBody();
+            // 灯籠が既に読み込まれている場合は、物理ボディを再作成
+            if (lanterns.length > 0) {
+                resetLanterns();
             }
         }
         
@@ -257,6 +257,8 @@
             // モデルのサイズを取得
             const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+            const bottomY = box.min.y;
             
             // モデルの形状を近似するためのボックス形状を使用
             const boxSize = new CANNON.Vec3(
@@ -269,17 +271,20 @@
             // 坂の角度に基づいてモデルの初期位置を計算
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
-            const startHeight = 8; // 坂の上部からの高さ
             
             // 坂の上にモデルを配置（少しずつずらして配置）
             const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
             const xPos = xOffset;
-            const zPos = -8 - index * 0.5; // 坂の上部（少しずつ奥にずらす）
-            const yPos = startHeight * Math.sin(radians) + boxSize.y + 0.1; // モデルが坂の上に乗るように
+            const zPos = -5 - index * 0.3; // 坂の上部（手前寄りに配置、少しずつ奥にずらす）
+            
+            // 坂の表面に沿った高さを計算（bottomYの調整を考慮）
+            const slopeHeight = Math.abs(zPos) * Math.tan(radians); // 坂の傾斜に沿った高さ
+            const modelBottomOffset = Math.abs(bottomY); // モデルの底部オフセット
+            const yPos = slopeHeight + boxSize.y + modelBottomOffset + 0.2; // モデルが坂の表面に正確に乗るように
             
             // 物理ボディを作成
             const body = new CANNON.Body({
-                mass: 5, // 質量を設定
+                mass: 20, // 質量を重くして坂にしっかりと密着させる
                 position: new CANNON.Vec3(xPos, yPos, zPos),
                 shape: modelShape
             });
@@ -295,8 +300,9 @@
             // 初期回転を設定（横倒しにする）
             body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
             
-            // 物理世界に追加
-            world.addBody(body);
+            // 初期速度と角速度を明示的に0に設定
+            body.velocity.set(0, 0, 0);
+            body.angularVelocity.set(0, 0, 0);
             
             // モデルをピボットグループに追加
             const pivot = new THREE.Group();
@@ -317,11 +323,17 @@
                 body.quaternion.w
             ));
             
+            // 完全に初期化が完了してから物理世界に追加
+            setTimeout(() => {
+                world.addBody(body);
+            }, 100); // 100ms後に物理世界に追加
+            
             // 灯籠オブジェクトを返す
             return {
                 model: model,
                 body: body,
-                pivot: pivot
+                pivot: pivot,
+                rotationSpeed: (Math.random() * 0.02 + 0.01) * (Math.random() > 0.5 ? 1 : -1) // ランダムな回転速度
             };
         }
         
@@ -334,6 +346,11 @@
                 // 物理ボディを削除
                 if (lantern.body) {
                     world.removeBody(lantern.body);
+                }
+                
+                // シーンからピボットを削除
+                if (lantern.pivot) {
+                    scene.remove(lantern.pivot);
                 }
                 
                 // 新しい灯籠を作成
@@ -523,28 +540,37 @@
             controls.update();
             
             // 物理シミュレーションの更新
-            if (isSimulationRunning && world && modelBody && lanternModel) {
+            if (isSimulationRunning && world && lanterns.length > 0) {
                 // 物理世界を更新
                 world.step(timeStep);
                 
-                // モデルの位置と回転を更新
-                modelPivot.position.copy(new THREE.Vector3(
-                    modelBody.position.x,
-                    modelBody.position.y,
-                    modelBody.position.z
-                ));
-                
-                // モデルの回転を更新
-                modelPivot.quaternion.copy(new THREE.Quaternion(
-                    modelBody.quaternion.x,
-                    modelBody.quaternion.y,
-                    modelBody.quaternion.z,
-                    modelBody.quaternion.w
-                ));
-                
-                // モデルが一定以下に落ちたらリセット
-                if (modelBody.position.y < -10) {
-                    createModelBody();
+                // すべての灯籠の位置と回転を更新
+                for (let i = 0; i < lanterns.length; i++) {
+                    const lantern = lanterns[i];
+                    
+                    // モデルの位置と回転を更新
+                    lantern.pivot.position.copy(new THREE.Vector3(
+                        lantern.body.position.x,
+                        lantern.body.position.y,
+                        lantern.body.position.z
+                    ));
+                    
+                    // 物理シミュレーションの回転を適用
+                    lantern.pivot.quaternion.copy(new THREE.Quaternion(
+                        lantern.body.quaternion.x,
+                        lantern.body.quaternion.y,
+                        lantern.body.quaternion.z,
+                        lantern.body.quaternion.w
+                    ));
+                    
+                    // 追加のY軸回転を適用（勢いよく転がる効果）
+                    lantern.pivot.rotateY(lantern.rotationSpeed);
+                    
+                    // モデルが一定以下に落ちたらリセット
+                    if (lantern.body.position.y < -10) {
+                        resetLanterns();
+                        break; // リセット後はループを抜ける
+                    }
                 }
             }
             
@@ -553,7 +579,7 @@
         
         // 初期化と実行
         initPhysics();
-        loadModel();
+        loadModels();
         animate();
     </script>
 </body>
