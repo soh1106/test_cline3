@@ -121,7 +121,7 @@
         
         // 複数の灯籠を管理する配列
         const lanterns = [];
-        const lanternCount = 5; // 灯籠の数
+        const lanternCount = 1; // 灯籠の数
         
         // シーン、カメラ、レンダラーの設定
         const scene = new THREE.Scene();
@@ -163,9 +163,9 @@
         // 地面を作成
         const groundGeometry = new THREE.PlaneGeometry(100, 100);
         const groundMaterial = new THREE.MeshStandardMaterial({
-            color: 0x7CFC00,
-            roughness: 0.8,
-            metalness: 0.2
+            color: 0x8B7355, // より自然な土色
+            roughness: 0.9,
+            metalness: 0.1
         });
         const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
         groundMesh.rotation.x = -Math.PI / 2;
@@ -192,8 +192,55 @@
             world.addBody(groundBody);
             
             // 坂の物理ボディを作成
-            createSlope();
+            loadSlopeModel();
         }
+        
+        // 坂用のGLBモデルを読み込む関数
+        function loadSlopeModel() {
+            const slopeModelPath = '_model/miura_slope.glb';
+            
+            console.log('坂モデルの読み込みを試行:', slopeModelPath);
+            
+            // DRACOローダーの設定
+            const dracoLoader = new THREE.DRACOLoader();
+            dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/');
+            
+            // GLTFローダーの設定
+            const loader = new THREE.GLTFLoader();
+            loader.setDRACOLoader(dracoLoader);
+            
+            loader.load(
+                slopeModelPath,
+                function(gltf) {
+                    console.log('坂モデルを正常に読み込みました');
+                    slopeModel = gltf.scene;
+                    
+                    // モデルのスケールを調整（必要に応じて）
+                    slopeModel.scale.set(1, 1, 1);
+                    
+                    // シャドウを有効化
+                    slopeModel.traverse(function(child) {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    
+                    createSlope();
+                },
+                function(xhr) {
+                    console.log('坂モデル読み込み進捗:', (xhr.loaded / xhr.total * 100) + '%');
+                },
+                function(error) {
+                    console.error('坂モデルの読み込みに失敗しました:', error);
+                    console.log('デフォルトの坂を使用します');
+                    createSlope();
+                }
+            );
+        }
+        
+        // 坂用のGLBモデルを保存する変数
+        let slopeModel = null;
         
         function createSlope() {
             // 既存の坂を削除
@@ -208,34 +255,80 @@
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
             
-            // 坂のサイズ
-            const slopeWidth = 10;
-            const slopeHeight = 0.2;
-            const slopeDepth = 20;
-            
-            // Three.jsの坂メッシュを作成
-            const slopeGeometry = new THREE.BoxGeometry(slopeWidth, slopeHeight, slopeDepth);
-            const slopeMaterial = new THREE.MeshStandardMaterial({
-                color: 0xA0522D,
-                roughness: 0.8,
-                metalness: 0.2
-            });
-            slopeMesh = new THREE.Mesh(slopeGeometry, slopeMaterial);
-            slopeMesh.castShadow = true;
-            slopeMesh.receiveShadow = true;
-            
-            // 坂の位置と回転を設定
-            slopeMesh.position.set(0, 0, 0);
-            slopeMesh.rotation.x = radians;
-            scene.add(slopeMesh);
-            
-            // 坂の物理ボディを作成
-            const slopeShape = new CANNON.Box(new CANNON.Vec3(slopeWidth/2, slopeHeight/2, slopeDepth/2));
-            slopeBody = new CANNON.Body({
-                mass: 0, // 質量0で固定
-                position: new CANNON.Vec3(0, 0, 0),
-                shape: slopeShape
-            });
+            if (slopeModel) {
+                // GLBモデルを使用して坂を作成
+                slopeMesh = slopeModel.clone();
+                slopeMesh.castShadow = true;
+                slopeMesh.receiveShadow = true;
+                
+                // シャドウを有効化
+                slopeMesh.traverse(function(child) {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+                
+                // 坂の位置と回転を設定（角度スライダーに対応）
+                slopeMesh.position.set(0, 0, 0);
+                slopeMesh.rotation.x = radians; // 角度スライダーの値を適用
+                scene.add(slopeMesh);
+                
+                // モデルのバウンディングボックスを取得
+                const box = new THREE.Box3().setFromObject(slopeMesh);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                
+                // より正確な坂の物理ボディを作成
+                slopeBody = new CANNON.Body({ mass: 0 });
+                
+                // 坂全体を覆う大きなボックス
+                const mainSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/2, size.z/2));
+                slopeBody.addShape(mainSlopeShape, new CANNON.Vec3(0, center.y, 0));
+                
+                // 坂の上部（灯籠が最初に接触する部分）
+                const topSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/4, size.z/4));
+                slopeBody.addShape(topSlopeShape, new CANNON.Vec3(0, center.y + size.y/3, -size.z/3));
+                
+                // 坂の中部
+                const midSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/3, size.z/4));
+                slopeBody.addShape(midSlopeShape, new CANNON.Vec3(0, center.y, 0));
+                
+                // 坂の下部
+                const bottomSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/4, size.z/4));
+                slopeBody.addShape(bottomSlopeShape, new CANNON.Vec3(0, center.y - size.y/4, size.z/3));
+                
+                slopeBody.position.set(0, 0, 0);
+                
+                // 坂の回転を設定
+                slopeBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), radians);
+            } else {
+                // フォールバック：デフォルトの箱を使用
+                const slopeWidth = 10;
+                const slopeHeight = 0.2;
+                const slopeDepth = 20;
+                
+                const slopeGeometry = new THREE.BoxGeometry(slopeWidth, slopeHeight, slopeDepth);
+                const slopeMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xA0522D,
+                    roughness: 0.8,
+                    metalness: 0.2
+                });
+                slopeMesh = new THREE.Mesh(slopeGeometry, slopeMaterial);
+                slopeMesh.castShadow = true;
+                slopeMesh.receiveShadow = true;
+                
+                slopeMesh.position.set(0, 0, 0);
+                slopeMesh.rotation.x = radians;
+                scene.add(slopeMesh);
+                
+                const slopeShape = new CANNON.Box(new CANNON.Vec3(slopeWidth/2, slopeHeight/2, slopeDepth/2));
+                slopeBody = new CANNON.Body({
+                    mass: 0,
+                    position: new CANNON.Vec3(0, 0, 0),
+                    shape: slopeShape
+                });
+            }
             
             // 摩擦係数を設定
             const friction = parseFloat(document.getElementById('friction').value);
@@ -268,23 +361,22 @@
             );
             const modelShape = new CANNON.Box(boxSize);
             
-            // 坂の角度に基づいてモデルの初期位置を計算
+            // 坂の角度に基づいて灯籠の初期位置を計算
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
             
             // 坂の上にモデルを配置（少しずつずらして配置）
             const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
             const xPos = xOffset;
-            const zPos = -5 - index * 0.3; // 坂の上部（手前寄りに配置、少しずつ奥にずらす）
+            const zPos = -3 - index * 0.2; // 坂の上部により近い位置に配置
             
-            // 坂の表面に沿った高さを計算（bottomYの調整を考慮）
-            const slopeHeight = Math.abs(zPos) * Math.tan(radians); // 坂の傾斜に沿った高さ
-            const modelBottomOffset = Math.abs(bottomY); // モデルの底部オフセット
-            const yPos = slopeHeight + boxSize.y + modelBottomOffset + 0.2; // モデルが坂の表面に正確に乗るように
+            // 坂の表面に沿った高さをより正確に計算
+            const slopeHeight = Math.abs(zPos) * Math.sin(radians); // sin を使用してより正確な高さを計算
+            const yPos = slopeHeight + boxSize.y + 0.5; // 坂の表面から少し上に配置
             
             // 物理ボディを作成
             const body = new CANNON.Body({
-                mass: 20, // 質量を重くして坂にしっかりと密着させる
+                mass: 10, // 質量を適度に設定
                 position: new CANNON.Vec3(xPos, yPos, zPos),
                 shape: modelShape
             });
@@ -293,16 +385,21 @@
             const friction = parseFloat(document.getElementById('friction').value);
             body.material = new CANNON.Material();
             body.material.friction = friction;
+            body.material.restitution = 0.1; // 反発係数を低く設定
             
-            // 回転の減衰を小さくして、よく回転するようにする
-            body.angularDamping = 0.1;
+            // 線形減衰と角減衰を設定して安定させる
+            body.linearDamping = 0.1;
+            body.angularDamping = 0.2;
             
             // 初期回転を設定（横倒しにする）
             body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
             
-            // 初期速度と角速度を明示的に0に設定
+            // 初期速度と角速度を確実に0に設定
             body.velocity.set(0, 0, 0);
             body.angularVelocity.set(0, 0, 0);
+            
+            // 物理ボディの位置を再度確認して設定
+            body.position.set(xPos, yPos, zPos);
             
             // モデルをピボットグループに追加
             const pivot = new THREE.Group();
@@ -323,10 +420,15 @@
                 body.quaternion.w
             ));
             
-            // 完全に初期化が完了してから物理世界に追加
+            // 物理世界に即座に追加（遅延を削除）
+            world.addBody(body);
+            
+            // 追加後に再度初期状態を確認
             setTimeout(() => {
-                world.addBody(body);
-            }, 100); // 100ms後に物理世界に追加
+                body.velocity.set(0, 0, 0);
+                body.angularVelocity.set(0, 0, 0);
+                body.position.set(xPos, yPos, zPos);
+            }, 50); // 50ms後に状態を再確認
             
             // 灯籠オブジェクトを返す
             return {
@@ -353,8 +455,9 @@
                     scene.remove(lantern.pivot);
                 }
                 
-                // 新しい灯籠を作成
-                lanterns[i] = createLantern(lantern.model, i);
+                // 新しい灯籠を作成（モデルをクローンして使用）
+                const newModel = lantern.model.clone();
+                lanterns[i] = createLantern(newModel, i);
             }
         }
         
