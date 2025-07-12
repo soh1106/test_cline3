@@ -361,22 +361,25 @@
             );
             const modelShape = new CANNON.Box(boxSize);
             
-            // 坂の角度に基づいて灯籠の初期位置を計算
+            // 坂の角度を取得
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
             
-            // 坂の上にモデルを配置（少しずつずらして配置）
+            // 灯籠の初期位置を坂の上部に設定（シンプルな計算）
             const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
             const xPos = xOffset;
-            const zPos = -3 - index * 0.2; // 坂の上部により近い位置に配置
+            const zPos = -5; // 坂の上部
             
-            // 坂の表面に沿った高さをより正確に計算
-            const slopeHeight = Math.abs(zPos) * Math.sin(radians); // sin を使用してより正確な高さを計算
-            const yPos = slopeHeight + boxSize.y + 0.5; // 坂の表面から少し上に配置
+            // 坂の上の高さを計算（坂の傾斜を考慮）
+            // 坂の中心が(0,0,0)で、Z=-5の位置での高さ
+            const slopeHeight = Math.abs(zPos) * Math.tan(radians);
+            const yPos = slopeHeight + boxSize.y * 2; // 坂の表面より十分上に配置
+            
+            console.log(`灯籠${index}の初期位置: x=${xPos}, y=${yPos}, z=${zPos}, 坂角度=${slopeAngle}度`);
             
             // 物理ボディを作成
             const body = new CANNON.Body({
-                mass: 10, // 質量を適度に設定
+                mass: 1, // 軽い質量
                 position: new CANNON.Vec3(xPos, yPos, zPos),
                 shape: modelShape
             });
@@ -385,21 +388,18 @@
             const friction = parseFloat(document.getElementById('friction').value);
             body.material = new CANNON.Material();
             body.material.friction = friction;
-            body.material.restitution = 0.1; // 反発係数を低く設定
+            body.material.restitution = 0.3;
             
-            // 線形減衰と角減衰を設定して安定させる
+            // 減衰設定
             body.linearDamping = 0.1;
-            body.angularDamping = 0.2;
+            body.angularDamping = 0.1;
             
-            // 初期回転を設定（横倒しにする）
-            body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+            // 初期回転を設定（立った状態）
+            body.quaternion.set(0, 0, 0, 1); // 回転なし
             
-            // 初期速度と角速度を確実に0に設定
+            // 初期速度を0に設定
             body.velocity.set(0, 0, 0);
             body.angularVelocity.set(0, 0, 0);
-            
-            // 物理ボディの位置を再度確認して設定
-            body.position.set(xPos, yPos, zPos);
             
             // モデルをピボットグループに追加
             const pivot = new THREE.Group();
@@ -420,15 +420,8 @@
                 body.quaternion.w
             ));
             
-            // 物理世界に即座に追加（遅延を削除）
+            // 物理世界に追加
             world.addBody(body);
-            
-            // 追加後に再度初期状態を確認
-            setTimeout(() => {
-                body.velocity.set(0, 0, 0);
-                body.angularVelocity.set(0, 0, 0);
-                body.position.set(xPos, yPos, zPos);
-            }, 50); // 50ms後に状態を再確認
             
             // 灯籠オブジェクトを返す
             return {
