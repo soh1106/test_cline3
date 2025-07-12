@@ -333,7 +333,7 @@
                 model: model,
                 body: body,
                 pivot: pivot,
-                rotationSpeed: (Math.random() * 0.02 + 0.01) * (Math.random() > 0.5 ? 1 : -1) // ランダムな回転速度
+                rotationSpeed: (Math.random() * 0.75 + 0.45) * (Math.random() > 0.5 ? 1 : -1) // ランダムな回転速度（15倍速く）
             };
         }
         
@@ -564,7 +564,11 @@
                     ));
                     
                     // 追加のY軸回転を適用（勢いよく転がる効果）
-                    lantern.pivot.rotateY(lantern.rotationSpeed);
+                    // 物理シミュレーションの速度に基づいてY軸回転速度を調整
+                    const velocity = lantern.body.velocity.length();
+                    const dynamicRotationSpeed = lantern.rotationSpeed + (velocity * 1.1);
+                    // 回転の向きを逆にして、転がりの方向と一致させる
+                    lantern.pivot.rotateY(-dynamicRotationSpeed);
                     
                     // モデルが一定以下に落ちたらリセット
                     if (lantern.body.position.y < -10) {
