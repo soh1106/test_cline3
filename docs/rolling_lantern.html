@@ -82,6 +82,14 @@
 </head>
 <body>
     <div id="info">転がる石灯籠 - ドラッグ: 回転 | スクロール: ズーム</div>
+    <div id="debug" style="position: fixed; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 10px; font-size: 12px; border-radius: 4px; font-family: monospace;">
+        <div>灯籠の高さ: <span id="lanternHeight">計算中...</span></div>
+        <div>道路表面Y: <span id="roadSurfaceY">計算中...</span></div>
+        <div>実際の坂表面Y: <span id="actualSlopeY">計算中...</span></div>
+        <div>灯籠位置Y: <span id="lanternY">計算中...</span></div>
+        <div>高度制限: <span id="heightLimit">計算中...</span></div>
+        <div>道路からの距離: <span id="distanceFromRoad">計算中...</span></div>
+    </div>
     <div id="controls">
         <div class="control-group">
             <h3 style="margin-top: 0;">転がる石灯籠</h3>
@@ -91,12 +99,17 @@
             <button id="resetSimulation">シミュレーションリセット</button>
         </div>
         <div class="control-group slider-container">
-            <label for="slopeAngle">坂の角度: <span id="slopeAngleValue">45°</span></label>
-            <input type="range" id="slopeAngle" min="5" max="45" value="45" step="1">
+            <label for="slopeAngle">坂の角度: <span id="slopeAngleValue">20°</span></label>
+            <input type="range" id="slopeAngle" min="5" max="45" value="20" step="1">
         </div>
         <div class="control-group">
             <label for="friction">摩擦係数: <span id="frictionValue">0.1</span></label>
             <input type="range" id="friction" min="0" max="1" value="0.1" step="0.05">
+        </div>
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="showRoadSurface" checked> 道路面を表示
+            </label>
         </div>
         <div class="control-group">
             <button id="resetCamera">カメラリセット</button>
@@ -116,7 +129,7 @@
         let groundBody;
         let slopeBody;
         let slopeMesh;
-        let timeStep = 1/60;
+        let timeStep = 1/120; // より小さなタイムステップで安定性を向上
         let isSimulationRunning = true;
         
         // 複数の灯籠を管理する配列
@@ -160,18 +173,22 @@
         directionalLight.shadow.camera.bottom = -20;
         scene.add(directionalLight);
         
-        // 地面を作成
-        const groundGeometry = new THREE.PlaneGeometry(100, 100);
-        const groundMaterial = new THREE.MeshStandardMaterial({
-            color: 0x8B7355, // より自然な土色
-            roughness: 0.9,
-            metalness: 0.1
-        });
-        const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-        groundMesh.rotation.x = -Math.PI / 2;
-        groundMesh.position.y = -2;
-        groundMesh.receiveShadow = true;
-        scene.add(groundMesh);
+        // XYZ軸を表示するヘルパーを追加
+        const axesHelper = new THREE.AxesHelper(5);
+        scene.add(axesHelper);
+        
+        // 地面プレーンを削除（ユーザーリクエストにより）
+        // const groundGeometry = new THREE.PlaneGeometry(100, 100);
+        // const groundMaterial = new THREE.MeshStandardMaterial({
+        //     color: 0x8B7355, // より自然な土色
+        //     roughness: 0.9,
+        //     metalness: 0.1
+        // });
+        // const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+        // groundMesh.rotation.x = -Math.PI / 2;
+        // groundMesh.position.y = -2;
+        // groundMesh.receiveShadow = true;
+        // scene.add(groundMesh);
         
         // 物理世界を初期化
         function initPhysics() {
@@ -179,17 +196,18 @@
             world = new CANNON.World();
             world.gravity.set(0, -9.82, 0); // 重力を設定
             world.broadphase = new CANNON.NaiveBroadphase();
-            world.solver.iterations = 10;
+            world.solver.iterations = 15; // より多くの反復で安定性を向上
+            world.solver.tolerance = 0.001; // より厳密な許容値
             
-            // 地面の物理ボディを作成
-            const groundShape = new CANNON.Plane();
-            groundBody = new CANNON.Body({
-                mass: 0, // 質量0で固定
-                position: new CANNON.Vec3(0, -2, 0),
-                shape: groundShape
-            });
-            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2); // 地面を水平にする
-            world.addBody(groundBody);
+            // 地面の物理ボディを削除（ユーザーリクエストにより）
+            // const groundShape = new CANNON.Plane();
+            // groundBody = new CANNON.Body({
+            //     mass: 0, // 質量0で固定
+            //     position: new CANNON.Vec3(0, -2, 0),
+            //     shape: groundShape
+            // });
+            // groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2); // 地面を水平にする
+            // world.addBody(groundBody);
             
             // 坂の物理ボディを作成
             loadSlopeModel();
@@ -241,6 +259,36 @@
         
         // 坂用のGLBモデルを保存する変数
         let slopeModel = null;
+        let roadPlane = null; // 道路面表示用のプレーン
+        
+        // レイキャスター（坂の表面高度を動的に測定するため）
+        const raycaster = new THREE.Raycaster();
+        
+        // 坂の表面高度を取得する関数
+        function getSlopeHeightAtPosition(x, z) {
+            if (!slopeMesh) {
+                return 0; // 坂モデルが存在しない場合はデフォルト値
+            }
+            
+            // 上方向から下向きにレイを飛ばす
+            const rayOrigin = new THREE.Vector3(x, 50, z); // 十分高い位置から
+            const rayDirection = new THREE.Vector3(0, -1, 0); // 下向き
+            
+            raycaster.set(rayOrigin, rayDirection);
+            
+            // 坂メッシュとの交点を計算
+            const intersects = raycaster.intersectObject(slopeMesh, true);
+            
+            if (intersects.length > 0) {
+                // 最初の交点（最も高い位置）のY座標を返す
+                return intersects[0].point.y;
+            } else {
+                // 交点がない場合は坂モデルの中央高度を返す
+                const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
+                const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
+                return slopeCenter.y;
+            }
+        }
         
         function createSlope() {
             // 既存の坂を削除
@@ -249,6 +297,11 @@
             }
             if (slopeBody) {
                 world.removeBody(slopeBody);
+            }
+            // 既存の道路面プレーンを削除
+            if (roadPlane) {
+                scene.remove(roadPlane);
+                roadPlane = null;
             }
             
             // 坂の角度を取得
@@ -273,6 +326,33 @@
                 slopeMesh.position.set(0, 0, 0);
                 slopeMesh.rotation.x = radians; // 角度スライダーの値を適用
                 scene.add(slopeMesh);
+                
+                // 坂モデルの底面（実際の道路面）に赤いプレーンを配置
+                const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
+                const slopeSize = slopeBox.getSize(new THREE.Vector3());
+                const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
+                
+                // 道路表面を赤く表示するプレーンを追加（チェックボックスの状態に応じて）
+                const showRoadSurface = document.getElementById('showRoadSurface').checked;
+                if (showRoadSurface) {
+                    const roadGeometry = new THREE.PlaneGeometry(slopeSize.x, slopeSize.z);
+                    const roadMaterial = new THREE.MeshBasicMaterial({
+                        color: 0xff0000, // 赤色
+                        transparent: true,
+                        opacity: 0.3,
+                        side: THREE.DoubleSide
+                    });
+                    roadPlane = new THREE.Mesh(roadGeometry, roadMaterial);
+                    
+                    // 坂モデルの底面に配置
+                    roadPlane.rotation.x = radians + Math.PI / 2; // 坂の角度 + X軸に90度回転
+                    roadPlane.position.set(
+                        slopeCenter.x,
+                        slopeCenter.y, // 坂モデルの中央高度を道路面として使用
+                        slopeCenter.z
+                    );
+                    scene.add(roadPlane);
+                }
                 
                 // モデルのバウンディングボックスを取得
                 const box = new THREE.Box3().setFromObject(slopeMesh);
@@ -364,7 +444,7 @@
             // 灯籠の初期位置を坂の上部に設定
             const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
             const xPos = xOffset;
-            const zPos = -6; // 坂の上部
+            const zPos = -8; // 坂のより上部に配置
             
             // 坂モデルが存在する場合は、そのバウンディングボックスを使用
             let yPos;
@@ -374,31 +454,28 @@
                 const slopeSize = slopeBox.getSize(new THREE.Vector3());
                 const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
                 
-                // 坂の上部の実際の高さを計算
-                // Z位置での坂の表面高度を推定
-                const relativeZ = zPos; // 坂の中心からの相対Z位置
-                const slopeTopY = slopeBox.max.y; // 坂の最高点
-                const slopeCenterY = slopeCenter.y; // 坂の中心Y座標
+                // 坂の角度を考慮した高さ計算
+                const slopeLength = slopeSize.z / 2; // 坂の半分の長さ
+                const heightAtPosition = Math.abs(zPos) * Math.tan(radians); // 坂の角度による高さ
                 
-                // 坂の傾斜を考慮した表面高度
-                const surfaceY = slopeCenterY + (Math.abs(relativeZ) / (slopeSize.z/2)) * (slopeTopY - slopeCenterY);
-                yPos = surfaceY + boxSize.y + 0.5; // 坂の表面から少し上に配置
+                // 坂の表面高度を計算
+                yPos = slopeCenter.y + heightAtPosition + boxSize.y + 1.0; // 坂の表面から十分に上に配置
                 
                 console.log(`坂モデル情報 - サイズ: ${slopeSize.x.toFixed(2)}, ${slopeSize.y.toFixed(2)}, ${slopeSize.z.toFixed(2)}`);
                 console.log(`坂モデル情報 - 中心: ${slopeCenter.x.toFixed(2)}, ${slopeCenter.y.toFixed(2)}, ${slopeCenter.z.toFixed(2)}`);
-                console.log(`坂モデル情報 - 最高点Y: ${slopeTopY.toFixed(2)}, 計算された表面Y: ${surfaceY.toFixed(2)}`);
+                console.log(`計算された高さ: ${heightAtPosition.toFixed(2)}, 最終Y位置: ${yPos.toFixed(2)}`);
             } else {
                 // フォールバック: 理論的な坂の高さ計算
                 const baseSlopeY = 0;
-                const slopeHeight = baseSlopeY + Math.abs(zPos) * Math.sin(radians);
-                yPos = slopeHeight + boxSize.y + 1;
+                const slopeHeight = baseSlopeY + Math.abs(zPos) * Math.tan(radians);
+                yPos = slopeHeight + boxSize.y + 2;
             }
             
             console.log(`灯籠${index}の初期位置: x=${xPos}, y=${yPos}, z=${zPos}, 坂角度=${slopeAngle}度`);
             
             // 物理ボディを作成
             const body = new CANNON.Body({
-                mass: 1, // 軽い質量
+                mass: 2, // より重い質量で安定性を向上
                 position: new CANNON.Vec3(xPos, yPos, zPos),
                 shape: modelShape
             });
@@ -407,18 +484,33 @@
             const friction = parseFloat(document.getElementById('friction').value);
             body.material = new CANNON.Material();
             body.material.friction = friction;
-            body.material.restitution = 0.3;
+            body.material.restitution = 0.1; // 反発係数を下げて跳ねを抑制
             
-            // 減衰設定
-            body.linearDamping = 0.1;
-            body.angularDamping = 0.1;
+            // 減衰設定を強化して吹っ飛びを防ぐ
+            body.linearDamping = 0.4;
+            body.angularDamping = 0.3;
             
-            // 初期回転を設定（立った状態）
-            body.quaternion.set(0, 0, 0, 1); // 回転なし
+            // 初期回転を設定（水平面に対して並行な角度で転がりやすくする）
+            body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2); // Z軸周りに90度回転
             
             // 初期速度を0に設定
             body.velocity.set(0, 0, 0);
             body.angularVelocity.set(0, 0, 0);
+            
+            // 速度制限を設定して吹っ飛びを防ぐ
+            body.addEventListener('postStep', function() {
+                // 線形速度の制限
+                const maxLinearVelocity = 15;
+                if (body.velocity.length() > maxLinearVelocity) {
+                    body.velocity.scale(maxLinearVelocity / body.velocity.length(), body.velocity);
+                }
+                
+                // 角速度の制限
+                const maxAngularVelocity = 10;
+                if (body.angularVelocity.length() > maxAngularVelocity) {
+                    body.angularVelocity.scale(maxAngularVelocity / body.angularVelocity.length(), body.angularVelocity);
+                }
+            });
             
             // モデルをピボットグループに追加
             const pivot = new THREE.Group();
@@ -614,6 +706,31 @@
         document.getElementById('slopeAngle').addEventListener('input', function() {
             const angle = parseFloat(this.value);
             document.getElementById('slopeAngleValue').textContent = angle + '°';
+            
+            // 坂の角度変更時に灯籠の位置を調整
+            const radians = toRadians(angle);
+            
+            // 既存の灯籠の位置を調整して坂を突き抜けないようにする
+            for (let i = 0; i < lanterns.length; i++) {
+                const lantern = lanterns[i];
+                if (lantern.body && slopeMesh) {
+                    const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
+                    const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
+                    
+                    // 現在のZ位置での新しい坂の表面高度を計算
+                    const heightAtPosition = Math.abs(lantern.body.position.z) * Math.tan(radians);
+                    const newRoadSurfaceY = slopeCenter.y + heightAtPosition;
+                    const minSafeY = newRoadSurfaceY + 0.5; // 坂の表面より少し上
+                    
+                    // 灯籠が坂を突き抜けている場合は安全な位置に移動
+                    if (lantern.body.position.y < minSafeY) {
+                        lantern.body.position.y = minSafeY;
+                        // 速度もリセット
+                        lantern.body.velocity.y = Math.max(lantern.body.velocity.y, 0);
+                    }
+                }
+            }
+            
             createSlope();
         });
         
@@ -630,6 +747,16 @@
                 if (lanterns[i].body) {
                     lanterns[i].body.material.friction = friction;
                 }
+            }
+        });
+        
+        document.getElementById('showRoadSurface').addEventListener('change', function() {
+            // 道路面表示の切り替え
+            if (roadPlane) {
+                roadPlane.visible = this.checked;
+            } else if (this.checked) {
+                // チェックされているが道路面が存在しない場合は坂を再作成
+                createSlope();
             }
         });
         
@@ -685,8 +812,71 @@
                     // 回転の向きを逆にして、転がりの方向と一致させる
                     lantern.pivot.rotateY(-dynamicRotationSpeed);
                     
-                    // モデルが一定以下に落ちたらリセット
-                    if (lantern.body.position.y < -10) {
+                    // 坂の道路表面から厳格な距離制限で転がるように調整
+                    if (slopeMesh) {
+                        const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
+                        const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
+                        const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
+                        const radians = toRadians(slopeAngle);
+                        
+                        // 灯籠の実際の高さを取得
+                        const lanternBox = new THREE.Box3().setFromObject(lantern.model);
+                        const lanternSize = lanternBox.getSize(new THREE.Vector3());
+                        const actualLanternHeight = lanternSize.y;
+                        
+                        // レイキャスティングで実際の坂表面高度を取得
+                        const actualSlopeHeight = getSlopeHeightAtPosition(
+                            lantern.body.position.x,
+                            lantern.body.position.z
+                        );
+                        
+                        // 坂モデルの中央高度を基準道路表面として使用（従来の方法）
+                        const roadSurfaceY = slopeCenter.y;
+                        
+                        // 実際の坂表面を考慮した制限値を計算
+                        const useActualSurface = Math.abs(actualSlopeHeight - roadSurfaceY) > 0.1; // 差が0.1m以上ある場合
+                        const effectiveSurfaceY = useActualSurface ? actualSlopeHeight : roadSurfaceY;
+                        
+                        const maxAllowedY = effectiveSurfaceY + (actualLanternHeight * 2); // 灯籠の高さの2倍
+                        const minAllowedY = effectiveSurfaceY; // 実際の表面が下限
+                        const distanceFromRoad = lantern.body.position.y - effectiveSurfaceY;
+                        
+                        // デバッグ情報を更新
+                        document.getElementById('lanternHeight').textContent = actualLanternHeight.toFixed(2) + 'm';
+                        document.getElementById('roadSurfaceY').textContent = roadSurfaceY.toFixed(2);
+                        document.getElementById('actualSlopeY').textContent = actualSlopeHeight.toFixed(2);
+                        document.getElementById('lanternY').textContent = lantern.body.position.y.toFixed(2);
+                        document.getElementById('heightLimit').textContent = maxAllowedY.toFixed(2);
+                        document.getElementById('distanceFromRoad').textContent = distanceFromRoad.toFixed(2) + 'm';
+                        
+                        // Y座標が制限を超えた場合は厳格に制限する
+                        if (lantern.body.position.y > maxAllowedY) {
+                            lantern.body.position.y = maxAllowedY;
+                            // 上向きの速度を強制的に停止
+                            if (lantern.body.velocity.y > 0) {
+                                lantern.body.velocity.y = 0;
+                            }
+                        }
+                        
+                        // 坂を突き抜けないように下限も厳格に設定（実際の表面を使用）
+                        if (lantern.body.position.y < minAllowedY) {
+                            lantern.body.position.y = minAllowedY;
+                            // 下向きの速度を停止
+                            if (lantern.body.velocity.y < 0) {
+                                lantern.body.velocity.y = 0;
+                            }
+                        }
+                    }
+                    
+                    // 灯籠が坂の範囲外に出た場合のみリセット
+                    // 坂の一番下まで転がらせるため、非常に緩い条件に設定
+                    const isOutOfBounds = (
+                        lantern.body.position.y < -50 || // 非常に低い位置に落ちた場合
+                        Math.abs(lantern.body.position.x) > 50 || // X方向に大きく外れた場合
+                        lantern.body.position.z > 50 // 坂の範囲を大きく超えた場合
+                    );
+                    
+                    if (isOutOfBounds) {
                         resetLanterns();
                         break; // リセット後はループを抜ける
                     }
