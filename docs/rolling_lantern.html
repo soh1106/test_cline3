@@ -279,24 +279,20 @@
                 const size = box.getSize(new THREE.Vector3());
                 const center = box.getCenter(new THREE.Vector3());
                 
-                // より正確な坂の物理ボディを作成
+                console.log('坂モデルのサイズ:', size);
+                console.log('坂モデルの中心:', center);
+                console.log('坂モデルのバウンディングボックス:', box);
+                
+                // シンプルな坂の物理ボディを作成（傾斜面として）
                 slopeBody = new CANNON.Body({ mass: 0 });
                 
-                // 坂全体を覆う大きなボックス
-                const mainSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/2, size.z/2));
-                slopeBody.addShape(mainSlopeShape, new CANNON.Vec3(0, center.y, 0));
+                // 坂を傾斜面として近似（大きな平面）
+                const slopeWidth = Math.max(size.x, 20);
+                const slopeDepth = Math.max(size.z, 30);
+                const slopeHeight = 0.5;
                 
-                // 坂の上部（灯籠が最初に接触する部分）
-                const topSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/4, size.z/4));
-                slopeBody.addShape(topSlopeShape, new CANNON.Vec3(0, center.y + size.y/3, -size.z/3));
-                
-                // 坂の中部
-                const midSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/3, size.z/4));
-                slopeBody.addShape(midSlopeShape, new CANNON.Vec3(0, center.y, 0));
-                
-                // 坂の下部
-                const bottomSlopeShape = new CANNON.Box(new CANNON.Vec3(size.x/2, size.y/4, size.z/4));
-                slopeBody.addShape(bottomSlopeShape, new CANNON.Vec3(0, center.y - size.y/4, size.z/3));
+                const slopeShape = new CANNON.Box(new CANNON.Vec3(slopeWidth/2, slopeHeight/2, slopeDepth/2));
+                slopeBody.addShape(slopeShape, new CANNON.Vec3(0, center.y, 0));
                 
                 slopeBody.position.set(0, 0, 0);
                 
@@ -365,15 +361,38 @@
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
             
-            // 灯籠の初期位置を坂の上部に設定（シンプルな計算）
+            // 灯籠の初期位置を坂の上部に設定
             const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
             const xPos = xOffset;
-            const zPos = -5; // 坂の上部
+            const zPos = -6; // 坂の上部
             
-            // 坂の上の高さを計算（坂の傾斜を考慮）
-            // 坂の中心が(0,0,0)で、Z=-5の位置での高さ
-            const slopeHeight = Math.abs(zPos) * Math.tan(radians);
-            const yPos = slopeHeight + boxSize.y * 2; // 坂の表面より十分上に配置
+            // 坂モデルが存在する場合は、そのバウンディングボックスを使用
+            let yPos;
+            if (slopeMesh) {
+                // 坂モデルのバウンディングボックスを取得
+                const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
+                const slopeSize = slopeBox.getSize(new THREE.Vector3());
+                const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
+                
+                // 坂の上部の実際の高さを計算
+                // Z位置での坂の表面高度を推定
+                const relativeZ = zPos; // 坂の中心からの相対Z位置
+                const slopeTopY = slopeBox.max.y; // 坂の最高点
+                const slopeCenterY = slopeCenter.y; // 坂の中心Y座標
+                
+                // 坂の傾斜を考慮した表面高度
+                const surfaceY = slopeCenterY + (Math.abs(relativeZ) / (slopeSize.z/2)) * (slopeTopY - slopeCenterY);
+                yPos = surfaceY + boxSize.y + 0.5; // 坂の表面から少し上に配置
+                
+                console.log(`坂モデル情報 - サイズ: ${slopeSize.x.toFixed(2)}, ${slopeSize.y.toFixed(2)}, ${slopeSize.z.toFixed(2)}`);
+                console.log(`坂モデル情報 - 中心: ${slopeCenter.x.toFixed(2)}, ${slopeCenter.y.toFixed(2)}, ${slopeCenter.z.toFixed(2)}`);
+                console.log(`坂モデル情報 - 最高点Y: ${slopeTopY.toFixed(2)}, 計算された表面Y: ${surfaceY.toFixed(2)}`);
+            } else {
+                // フォールバック: 理論的な坂の高さ計算
+                const baseSlopeY = 0;
+                const slopeHeight = baseSlopeY + Math.abs(zPos) * Math.sin(radians);
+                yPos = slopeHeight + boxSize.y + 1;
+            }
             
             console.log(`灯籠${index}の初期位置: x=${xPos}, y=${yPos}, z=${zPos}, 坂角度=${slopeAngle}度`);
             
