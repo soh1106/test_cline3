@@ -236,6 +236,9 @@
                     // モデルのスケールを調整（必要に応じて）
                     slopeModel.scale.set(1, 1, 1);
                     
+                    // 道路面メッシュを特定
+                    identifyRoadSurfaces(slopeModel);
+                    
                     // シャドウを有効化
                     slopeModel.traverse(function(child) {
                         if (child.isMesh) {
@@ -260,9 +263,82 @@
         // 坂用のGLBモデルを保存する変数
         let slopeModel = null;
         let roadPlane = null; // 道路面表示用のプレーン
+        let roadSurfaceMeshes = []; // 実際の道路面メッシュを保存
         
         // レイキャスター（坂の表面高度を動的に測定するため）
         const raycaster = new THREE.Raycaster();
+        
+        // 道路面メッシュを特定する関数
+        function identifyRoadSurfaces(model) {
+            roadSurfaceMeshes = [];
+            
+            model.traverse(function(child) {
+                if (child.isMesh) {
+                    console.log(`メッシュを分析中: ${child.name || 'unnamed'}`);
+                    
+                    // メッシュの位置とサイズを分析
+                    const meshBox = new THREE.Box3().setFromObject(child);
+                    const meshSize = meshBox.getSize(new THREE.Vector3());
+                    const meshCenter = meshBox.getCenter(new THREE.Vector3());
+                    
+                    console.log(`  サイズ: ${meshSize.x.toFixed(2)}, ${meshSize.y.toFixed(2)}, ${meshSize.z.toFixed(2)}`);
+                    console.log(`  中心: ${meshCenter.x.toFixed(2)}, ${meshCenter.y.toFixed(2)}, ${meshCenter.z.toFixed(2)}`);
+                    
+                    // メッシュの法線ベクトルを分析して道路面を特定
+                    const geometry = child.geometry;
+                    if (geometry.attributes.normal) {
+                        const normals = geometry.attributes.normal.array;
+                        let upwardFacingCount = 0;
+                        let horizontalFacingCount = 0;
+                        let totalFaces = normals.length / 9; // 3頂点 × 3成分 = 9
+                        
+                        // 各面の法線を調べる
+                        for (let i = 0; i < normals.length; i += 9) {
+                            // 3つの頂点の法線の平均を計算
+                            const nx = (normals[i] + normals[i+3] + normals[i+6]) / 3;
+                            const ny = (normals[i+1] + normals[i+4] + normals[i+7]) / 3;
+                            const nz = (normals[i+2] + normals[i+5] + normals[i+8]) / 3;
+                            
+                            // Y成分が大きい（上向き）面をカウント
+                            if (ny > 0.3) { // 約17度以上上向きの面（条件を緩和）
+                                upwardFacingCount++;
+                            }
+                            
+                            // 水平に近い面をカウント
+                            if (Math.abs(ny) > Math.abs(nx) && Math.abs(ny) > Math.abs(nz)) {
+                                horizontalFacingCount++;
+                            }
+                        }
+                        
+                        const upwardRatio = upwardFacingCount / totalFaces;
+                        const horizontalRatio = horizontalFacingCount / totalFaces;
+                        
+                        console.log(`  上向き面比率: ${(upwardRatio * 100).toFixed(1)}%`);
+                        console.log(`  水平面比率: ${(horizontalRatio * 100).toFixed(1)}%`);
+                        
+                        // 道路面の判定条件を複数設定
+                        const isRoadSurface = (
+                            upwardRatio > 0.1 || // 10%以上が上向きの面
+                            horizontalRatio > 0.2 || // 20%以上が水平面
+                            (meshSize.x > 5 && meshSize.z > 5 && meshSize.y < meshSize.x * 0.5) // 平たい形状
+                        );
+                        
+                        if (isRoadSurface) {
+                            roadSurfaceMeshes.push(child);
+                            console.log(`  → 道路面メッシュとして特定`);
+                        }
+                    } else {
+                        // 法線情報がない場合は形状で判定
+                        if (meshSize.x > 5 && meshSize.z > 5 && meshSize.y < meshSize.x * 0.3) {
+                            roadSurfaceMeshes.push(child);
+                            console.log(`  → 形状により道路面メッシュとして特定`);
+                        }
+                    }
+                }
+            });
+            
+            console.log(`特定された道路面メッシュ数: ${roadSurfaceMeshes.length}`);
+        }
         
         // 坂の表面高度を取得する関数
         function getSlopeHeightAtPosition(x, z) {
@@ -276,7 +352,15 @@
             
             raycaster.set(rayOrigin, rayDirection);
             
-            // 坂メッシュとの交点を計算
+            // 道路面メッシュが特定されている場合はそれを優先
+            if (roadSurfaceMeshes.length > 0) {
+                const intersects = raycaster.intersectObjects(roadSurfaceMeshes, false);
+                if (intersects.length > 0) {
+                    return intersects[0].point.y;
+                }
+            }
+            
+            // 道路面メッシュで交点が見つからない場合は全体を対象
             const intersects = raycaster.intersectObject(slopeMesh, true);
             
             if (intersects.length > 0) {
@@ -335,23 +419,120 @@
                 // 道路表面を赤く表示するプレーンを追加（チェックボックスの状態に応じて）
                 const showRoadSurface = document.getElementById('showRoadSurface').checked;
                 if (showRoadSurface) {
-                    const roadGeometry = new THREE.PlaneGeometry(slopeSize.x, slopeSize.z);
-                    const roadMaterial = new THREE.MeshBasicMaterial({
-                        color: 0xff0000, // 赤色
-                        transparent: true,
-                        opacity: 0.3,
-                        side: THREE.DoubleSide
-                    });
-                    roadPlane = new THREE.Mesh(roadGeometry, roadMaterial);
-                    
-                    // 坂モデルの底面に配置
-                    roadPlane.rotation.x = radians + Math.PI / 2; // 坂の角度 + X軸に90度回転
-                    roadPlane.position.set(
-                        slopeCenter.x,
-                        slopeCenter.y, // 坂モデルの中央高度を道路面として使用
-                        slopeCenter.z
-                    );
-                    scene.add(roadPlane);
+                    if (roadSurfaceMeshes.length > 0) {
+                        // 特定された道路面メッシュに基づいて連続した道路面を作成
+                        
+                        // 全ての道路面メッシュの範囲を統合
+                        let minX = Infinity, maxX = -Infinity;
+                        let minZ = Infinity, maxZ = -Infinity;
+                        
+                        roadSurfaceMeshes.forEach(mesh => {
+                            const meshBox = new THREE.Box3().setFromObject(mesh);
+                            minX = Math.min(minX, meshBox.min.x);
+                            maxX = Math.max(maxX, meshBox.max.x);
+                            minZ = Math.min(minZ, meshBox.min.z);
+                            maxZ = Math.max(maxZ, meshBox.max.z);
+                        });
+                        
+                        const roadWidth = maxX - minX;
+                        const roadLength = maxZ - minZ;
+                        const roadCenterX = (minX + maxX) / 2;
+                        const roadCenterZ = (minZ + maxZ) / 2;
+                        
+                        console.log(`統合された道路面: 幅=${roadWidth.toFixed(2)}, 長さ=${roadLength.toFixed(2)}`);
+                        
+                        // 連続した道路面を作成（Z軸方向に分割して高さの変化を表現）
+                        const segments = 30; // より多くのセグメントで滑らかに
+                        const segmentDepth = roadLength / segments;
+                        
+                        // 道路面の頂点を生成
+                        const vertices = [];
+                        const indices = [];
+                        
+                        for (let i = 0; i <= segments; i++) {
+                            const z = minZ + (i / segments) * roadLength;
+                            
+                            // 真ん中あたりで高さを変化させる（正弦波を使用）
+                            const normalizedPosition = (i / segments) * 2 - 1; // -1 to 1
+                            const heightVariation = Math.sin(normalizedPosition * Math.PI * 2) * 0.2;
+                            
+                            // 実際の道路面の高度を取得
+                            const actualHeight = getSlopeHeightAtPosition(roadCenterX, z);
+                            const finalHeight = actualHeight + heightVariation + 0.05;
+                            
+                            // 道路の左端と右端の頂点を追加
+                            vertices.push(minX, finalHeight, z); // 左端
+                            vertices.push(maxX, finalHeight, z); // 右端
+                        }
+                        
+                        // インデックスを生成（三角形を作成）
+                        for (let i = 0; i < segments; i++) {
+                            const base = i * 2;
+                            
+                            // 各セグメントで2つの三角形を作成
+                            // 三角形1
+                            indices.push(base, base + 1, base + 2);
+                            // 三角形2
+                            indices.push(base + 1, base + 3, base + 2);
+                        }
+                        
+                        // ジオメトリを作成
+                        const roadGeometry = new THREE.BufferGeometry();
+                        roadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                        roadGeometry.setIndex(indices);
+                        roadGeometry.computeVertexNormals();
+                        
+                        const roadMaterial = new THREE.MeshBasicMaterial({
+                            color: 0xff0000, // 赤色
+                            transparent: true,
+                            opacity: 0.4,
+                            side: THREE.DoubleSide
+                        });
+                        
+                        roadPlane = new THREE.Mesh(roadGeometry, roadMaterial);
+                        scene.add(roadPlane);
+                        
+                    } else {
+                        // フォールバック: 従来の方法で連続した道路面を作成
+                        const segments = 30;
+                        const segmentWidth = slopeSize.x;
+                        const segmentDepth = slopeSize.z / segments;
+                        
+                        const vertices = [];
+                        const indices = [];
+                        
+                        for (let i = 0; i <= segments; i++) {
+                            const z = slopeCenter.z - slopeSize.z/2 + (i / segments) * slopeSize.z;
+                            const normalizedPosition = (i / segments) * 2 - 1;
+                            const heightVariation = Math.sin(normalizedPosition * Math.PI * 2) * 0.2;
+                            const slopeBasedHeight = slopeCenter.y + ((z - slopeCenter.z) * Math.sin(radians));
+                            const finalHeight = slopeBasedHeight + heightVariation;
+                            
+                            vertices.push(slopeCenter.x - segmentWidth/2, finalHeight, z);
+                            vertices.push(slopeCenter.x + segmentWidth/2, finalHeight, z);
+                        }
+                        
+                        for (let i = 0; i < segments; i++) {
+                            const base = i * 2;
+                            indices.push(base, base + 1, base + 2);
+                            indices.push(base + 1, base + 3, base + 2);
+                        }
+                        
+                        const roadGeometry = new THREE.BufferGeometry();
+                        roadGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                        roadGeometry.setIndex(indices);
+                        roadGeometry.computeVertexNormals();
+                        
+                        const roadMaterial = new THREE.MeshBasicMaterial({
+                            color: 0xff0000,
+                            transparent: true,
+                            opacity: 0.3,
+                            side: THREE.DoubleSide
+                        });
+                        
+                        roadPlane = new THREE.Mesh(roadGeometry, roadMaterial);
+                        scene.add(roadPlane);
+                    }
                 }
                 
                 // モデルのバウンディングボックスを取得
