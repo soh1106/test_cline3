@@ -108,7 +108,22 @@
         </div>
         <div class="control-group">
             <label>
-                <input type="checkbox" id="showRoadSurface" checked> 道路面を表示
+                <input type="checkbox" id="showRoadSurface"> 道路面を表示
+            </label>
+        </div>
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="showSlopeCollider"> 坂のコライダーを表示
+            </label>
+        </div>
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="showSlopeMesh"> 坂のメッシュを表示
+            </label>
+        </div>
+        <div class="control-group">
+            <label>
+                <input type="checkbox" id="showLanternCollider"> 灯籠のコライダーを表示
             </label>
         </div>
         <div class="control-group">
@@ -129,12 +144,15 @@
         let groundBody;
         let slopeBody;
         let slopeMesh;
-        let timeStep = 1/120; // より小さなタイムステップで安定性を向上
+        let timeStep = 1/60; // 標準的なタイムステップで安定性を確保
         let isSimulationRunning = true;
         
         // 複数の灯籠を管理する配列
         const lanterns = [];
         const lanternCount = 1; // 灯籠の数
+        
+        // 接触表示用の配列
+        const contactIndicators = [];
         
         // シーン、カメラ、レンダラーの設定
         const scene = new THREE.Scene();
@@ -194,10 +212,15 @@
         function initPhysics() {
             // 物理世界を作成
             world = new CANNON.World();
-            world.gravity.set(0, -9.82, 0); // 重力を設定
-            world.broadphase = new CANNON.NaiveBroadphase();
-            world.solver.iterations = 15; // より多くの反復で安定性を向上
-            world.solver.tolerance = 0.001; // より厳密な許容値
+            world.gravity.set(0, -5.0, 0); // 重力を弱くして安定性を向上
+            world.broadphase = new CANNON.NaiveBroadphase(); // シンプルなブロードフェーズで安定性重視
+            world.solver.iterations = 15; // 反復回数を増やして安定性向上
+            world.solver.tolerance = 0.01; // 許容値を緩くして安定性向上
+            
+            // 物理世界の安定性を向上させる設定
+            world.defaultContactMaterial.friction = 0.5; // 摩擦を高めて滑りを抑制
+            world.defaultContactMaterial.restitution = 0.01; // 反発を最小限に
+            world.allowSleep = true; // スリープ機能を有効化
             
             // 地面の物理ボディを削除（ユーザーリクエストにより）
             // const groundShape = new CANNON.Plane();
@@ -264,6 +287,8 @@
         let slopeModel = null;
         let roadPlane = null; // 道路面表示用のプレーン
         let roadSurfaceMeshes = []; // 実際の道路面メッシュを保存
+        let slopeColliderMesh = null; // 坂のコライダー視覚化メッシュ
+        let slopeWireframeMesh = null; // 坂のワイヤーフレームメッシュ
         
         // レイキャスター（坂の表面高度を動的に測定するため）
         const raycaster = new THREE.Raycaster();
@@ -544,18 +569,36 @@
                 console.log('坂モデルの中心:', center);
                 console.log('坂モデルのバウンディングボックス:', box);
                 
-                // シンプルな坂の物理ボディを作成（傾斜面として）
+                // GLBモデルのメッシュから物理形状を生成（最適化版）
                 slopeBody = new CANNON.Body({ mass: 0 });
                 
-                // 坂を傾斜面として近似（大きな平面）
-                const slopeWidth = Math.max(size.x, 20);
-                const slopeDepth = Math.max(size.z, 30);
-                const slopeHeight = 0.5;
+                // メッシュから頂点とインデックスを取得して物理形状を作成
+                const meshColliders = createMeshColliders(slopeMesh);
                 
-                const slopeShape = new CANNON.Box(new CANNON.Vec3(slopeWidth/2, slopeHeight/2, slopeDepth/2));
-                slopeBody.addShape(slopeShape, new CANNON.Vec3(0, center.y, 0));
+                if (meshColliders.length > 0) {
+                    // 複数のメッシュコライダーを追加
+                    meshColliders.forEach(collider => {
+                        slopeBody.addShape(collider.shape, collider.position);
+                    });
+                    console.log('GLBメッシュから', meshColliders.length, '個のコライダーを生成');
+                } else {
+                    // フォールバック: 簡略化されたボックス形状
+                    const slopeWidth = Math.max(size.x, 20);
+                    const slopeDepth = Math.max(size.z, 30);
+                    const slopeHeight = 1.0;
+                    
+                    const slopeShape = new CANNON.Box(new CANNON.Vec3(
+                        slopeWidth/2, slopeHeight/2, slopeDepth/2
+                    ));
+                    slopeBody.addShape(slopeShape);
+                    console.log('フォールバック: 簡略化されたボックス形状を使用');
+                }
                 
-                slopeBody.position.set(0, 0, 0);
+                // 坂の物理ボディの位置をGLBモデルの中心に合わせる
+                slopeBody.position.set(center.x, center.y, center.z);
+                
+                console.log('GLBモデルの中心位置:', center);
+                console.log('坂の物理ボディ位置を設定:', slopeBody.position);
                 
                 // 坂の回転を設定
                 slopeBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), radians);
@@ -594,6 +637,77 @@
             
             // 坂の回転を設定
             slopeBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), radians);
+            
+            // 坂のコライダー視覚化メッシュを作成（シンプル版）
+            if (slopeColliderMesh) {
+                scene.remove(slopeColliderMesh);
+            }
+            
+            // シンプルなボックス表示
+            const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
+            const slopeSize = slopeBox.getSize(new THREE.Vector3());
+            
+            const boxGeometry = new THREE.BoxGeometry(
+                slopeSize.x, 1.0, slopeSize.z
+            );
+            const boxMaterial = new THREE.MeshBasicMaterial({
+                color: 0x0066ff,
+                transparent: true,
+                opacity: 0.3,
+                wireframe: true
+            });
+            
+            slopeColliderMesh = new THREE.Mesh(boxGeometry, boxMaterial);
+            slopeColliderMesh.position.set(
+                slopeBody.position.x,
+                slopeBody.position.y,
+                slopeBody.position.z
+            );
+            slopeColliderMesh.quaternion.set(
+                slopeBody.quaternion.x,
+                slopeBody.quaternion.y,
+                slopeBody.quaternion.z,
+                slopeBody.quaternion.w
+            );
+            slopeColliderMesh.visible = false; // 初期状態では非表示
+            scene.add(slopeColliderMesh);
+            
+            console.log('坂の物理ボディ位置:', slopeBody.position);
+            console.log('坂のコライダーメッシュ位置:', slopeColliderMesh.position);
+            console.log('坂の物理ボディ回転:', slopeBody.quaternion);
+            console.log('坂のコライダーメッシュ回転:', slopeColliderMesh.quaternion);
+            
+            // 坂のワイヤーフレームメッシュを作成
+            if (slopeWireframeMesh) {
+                scene.remove(slopeWireframeMesh);
+            }
+            
+            if (slopeMesh && slopeModel) {
+                // GLBモデルからワイヤーフレームメッシュを作成
+                slopeWireframeMesh = slopeMesh.clone();
+                
+                // 全ての子メッシュをワイヤーフレーム表示に変更
+                slopeWireframeMesh.traverse(function(child) {
+                    if (child.isMesh) {
+                        // ワイヤーフレームマテリアルを作成
+                        child.material = new THREE.MeshBasicMaterial({
+                            color: 0x00ff00, // 緑色
+                            wireframe: true,
+                            transparent: true,
+                            opacity: 0.7
+                        });
+                    }
+                });
+                
+                slopeWireframeMesh.visible = false; // 初期状態では非表示
+                scene.add(slopeWireframeMesh);
+                
+                console.log('坂のワイヤーフレームメッシュを作成しました');
+            }
+            
+            // 坂の物理ボディに接触状態を追跡する変数を追加
+            slopeBody.isColliding = false;
+            
             world.addBody(slopeBody);
             
             // 灯籠が既に読み込まれている場合は、物理ボディを再作成
@@ -610,53 +724,47 @@
             const center = box.getCenter(new THREE.Vector3());
             const bottomY = box.min.y;
             
-            // モデルの形状を近似するためのボックス形状を使用
+            // モデルの形状を近似するためのボックス形状を使用（さらに小さく）
             const boxSize = new CANNON.Vec3(
-                size.x / 2,  // 幅の半分
-                size.y / 2,  // 高さの半分
-                size.z / 2   // 奥行きの半分
+                size.x / 6,  // 幅をさらに小さく
+                size.y / 6,  // 高さをさらに小さく
+                size.z / 6   // 奥行きをさらに小さく
             );
             const modelShape = new CANNON.Box(boxSize);
+            
+            console.log(`灯籠${index}のボックスサイズ:`, {
+                original: size,
+                physics: {
+                    x: boxSize.x * 2,
+                    y: boxSize.y * 2,
+                    z: boxSize.z * 2
+                }
+            });
             
             // 坂の角度を取得
             const slopeAngle = parseFloat(document.getElementById('slopeAngle').value);
             const radians = toRadians(slopeAngle);
             
-            // 灯籠の初期位置を坂の上部に設定
+            // 灯籠の初期位置を坂の上部に設定（より安全な位置に配置）
             const xOffset = (index - Math.floor(lanternCount / 2)) * 1.5;
             const xPos = xOffset;
-            const zPos = -8; // 坂のより上部に配置
+            const zPos = -4; // 坂の上部により近い位置に配置
             
-            // 坂モデルが存在する場合は、そのバウンディングボックスを使用
-            let yPos;
+            // 坂モデルが存在する場合は、実際の坂表面の高度を取得
+            let yPos = 3; // デフォルト高度を低く
             if (slopeMesh) {
-                // 坂モデルのバウンディングボックスを取得
-                const slopeBox = new THREE.Box3().setFromObject(slopeMesh);
-                const slopeSize = slopeBox.getSize(new THREE.Vector3());
-                const slopeCenter = slopeBox.getCenter(new THREE.Vector3());
+                // 坂の実際の表面高度を取得
+                const actualSlopeHeight = getSlopeHeightAtPosition(xPos, zPos);
+                yPos = actualSlopeHeight + size.y/2 + 0.5; // 坂表面からより近い位置に配置
                 
-                // 坂の角度を考慮した高さ計算
-                const slopeLength = slopeSize.z / 2; // 坂の半分の長さ
-                const heightAtPosition = Math.abs(zPos) * Math.tan(radians); // 坂の角度による高さ
-                
-                // 坂の表面高度を計算
-                yPos = slopeCenter.y + heightAtPosition + boxSize.y + 1.0; // 坂の表面から十分に上に配置
-                
-                console.log(`坂モデル情報 - サイズ: ${slopeSize.x.toFixed(2)}, ${slopeSize.y.toFixed(2)}, ${slopeSize.z.toFixed(2)}`);
-                console.log(`坂モデル情報 - 中心: ${slopeCenter.x.toFixed(2)}, ${slopeCenter.y.toFixed(2)}, ${slopeCenter.z.toFixed(2)}`);
-                console.log(`計算された高さ: ${heightAtPosition.toFixed(2)}, 最終Y位置: ${yPos.toFixed(2)}`);
-            } else {
-                // フォールバック: 理論的な坂の高さ計算
-                const baseSlopeY = 0;
-                const slopeHeight = baseSlopeY + Math.abs(zPos) * Math.tan(radians);
-                yPos = slopeHeight + boxSize.y + 2;
+                console.log(`灯籠${index} - 坂表面高度: ${actualSlopeHeight.toFixed(2)}, 配置高度: ${yPos.toFixed(2)}`);
             }
             
             console.log(`灯籠${index}の初期位置: x=${xPos}, y=${yPos}, z=${zPos}, 坂角度=${slopeAngle}度`);
             
             // 物理ボディを作成
             const body = new CANNON.Body({
-                mass: 2, // より重い質量で安定性を向上
+                mass: 20, // 質量をさらに軽くして安定性を向上
                 position: new CANNON.Vec3(xPos, yPos, zPos),
                 shape: modelShape
             });
@@ -664,32 +772,76 @@
             // 摩擦係数を設定
             const friction = parseFloat(document.getElementById('friction').value);
             body.material = new CANNON.Material();
-            body.material.friction = friction;
-            body.material.restitution = 0.1; // 反発係数を下げて跳ねを抑制
+            body.material.friction = Math.max(friction, 0.3); // 最低摩擦係数を設定
+            body.material.restitution = 0.01; // 反発係数を下げて跳ねを抑制
             
-            // 減衰設定を強化して吹っ飛びを防ぐ
-            body.linearDamping = 0.4;
-            body.angularDamping = 0.3;
+            // 減衰設定を強化
+            body.linearDamping = 0.7; // 線形減衰を強化
+            body.angularDamping = 0.7; // 角減衰を強化
             
-            // 初期回転を設定（水平面に対して並行な角度で転がりやすくする）
-            body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2); // Z軸周りに90度回転
-            
-            // 初期速度を0に設定
+            // 初期速度を確実に0に設定
             body.velocity.set(0, 0, 0);
             body.angularVelocity.set(0, 0, 0);
             
-            // 速度制限を設定して吹っ飛びを防ぐ
+            console.log(`灯籠${index}の物理ボディ作成:`, {
+                position: body.position,
+                velocity: body.velocity,
+                angularVelocity: body.angularVelocity,
+                mass: body.mass,
+                colliderSize: {
+                    x: boxSize.x * 2,
+                    y: boxSize.y * 2,
+                    z: boxSize.z * 2
+                }
+            });
+            
+            // 灯籠のコライダー視覚化メッシュを作成
+            const colliderGeometry = new THREE.BoxGeometry(
+                boxSize.x * 2, // 物理ボディと同じサイズ
+                boxSize.y * 2,
+                boxSize.z * 2
+            );
+            const colliderMaterial = new THREE.MeshBasicMaterial({
+                color: 0xff00ff, // マゼンタ色で表示
+                transparent: true,
+                opacity: 0.5,
+                wireframe: true
+            });
+            const colliderMesh = new THREE.Mesh(colliderGeometry, colliderMaterial);
+            colliderMesh.visible = false; // 初期状態では非表示
+            scene.add(colliderMesh);
+            
+            // 速度制限を厳しく設定して異常な動きを防ぐ
             body.addEventListener('postStep', function() {
-                // 線形速度の制限
-                const maxLinearVelocity = 15;
+                // 線形速度の制限を厳しく
+                const maxLinearVelocity = 8;
                 if (body.velocity.length() > maxLinearVelocity) {
                     body.velocity.scale(maxLinearVelocity / body.velocity.length(), body.velocity);
                 }
                 
-                // 角速度の制限
-                const maxAngularVelocity = 10;
+                // 角速度の制限を厳しく
+                const maxAngularVelocity = 5;
                 if (body.angularVelocity.length() > maxAngularVelocity) {
                     body.angularVelocity.scale(maxAngularVelocity / body.angularVelocity.length(), body.angularVelocity);
+                }
+                
+                // 異常な力が加わった場合の緊急停止
+                if (body.velocity.length() > 15) {
+                    body.velocity.scale(0.5, body.velocity);
+                    body.angularVelocity.scale(0.5, body.angularVelocity);
+                    console.warn(`灯籠${index}の速度が異常に高いため制限しました`);
+                }
+            });
+            
+            // 接触開始イベント
+            body.addEventListener('collide', function(event) {
+                // 接触相手を確認
+                const otherBody = event.target === body ? event.contact.bj : event.contact.bi;
+                
+                // 接触相手が坂の場合、坂のコライダーを表示
+                if (otherBody === slopeBody && slopeColliderMesh) {
+                    slopeBody.isColliding = true;
+                    console.log('灯籠が坂と接触しました'); // デバッグ用
                 }
             });
             
@@ -712,15 +864,19 @@
                 body.quaternion.w
             ));
             
-            // 物理世界に追加
-            world.addBody(body);
+            // 物理世界に追加（少し遅延させて安定化）
+            setTimeout(() => {
+                world.addBody(body);
+                console.log(`灯籠${index}を物理世界に追加完了`);
+            }, 100);
             
             // 灯籠オブジェクトを返す
             return {
                 model: model,
                 body: body,
                 pivot: pivot,
-                rotationSpeed: (Math.random() * 0.75 + 0.45) * (Math.random() > 0.5 ? 1 : -1) // ランダムな回転速度（15倍速く）
+                colliderMesh: colliderMesh,
+                rotationSpeed: (Math.random() * 0.2 + 0.1) * (Math.random() > 0.5 ? 1 : -1) // 回転速度をさらに抑制
             };
         }
         
@@ -738,6 +894,11 @@
                 // シーンからピボットを削除
                 if (lantern.pivot) {
                     scene.remove(lantern.pivot);
+                }
+                
+                // コライダーメッシュを削除
+                if (lantern.colliderMesh) {
+                    scene.remove(lantern.colliderMesh);
                 }
                 
                 // 新しい灯籠を作成（モデルをクローンして使用）
@@ -867,6 +1028,72 @@
             console.log('デフォルトの箱を作成しました');
         }
         
+        // メッシュから物理コライダーを生成する関数（改良版）
+        function createMeshColliders(mesh) {
+            const colliders = [];
+            
+            if (!mesh) return colliders;
+            
+            console.log('メッシュコライダー生成開始');
+            
+            mesh.traverse(function(child) {
+                if (child.isMesh && child.geometry) {
+                    try {
+                        // 各メッシュのバウンディングボックスを正確に計算
+                        child.geometry.computeBoundingBox();
+                        const bbox = child.geometry.boundingBox.clone();
+                        
+                        // メッシュのワールド変換を適用
+                        const worldMatrix = new THREE.Matrix4();
+                        child.updateWorldMatrix(true, false);
+                        worldMatrix.copy(child.matrixWorld);
+                        
+                        // バウンディングボックスをワールド座標に変換
+                        bbox.applyMatrix4(worldMatrix);
+                        
+                        const size = bbox.getSize(new THREE.Vector3());
+                        const center = bbox.getCenter(new THREE.Vector3());
+                        
+                        console.log(`メッシュ "${child.name || 'unnamed'}":`, {
+                            size: size,
+                            center: center,
+                            bbox: bbox
+                        });
+                        
+                        // メッシュが十分大きい場合のみコライダーを作成
+                        if (size.x > 0.05 && size.y > 0.05 && size.z > 0.05) {
+                            const boxShape = new CANNON.Box(new CANNON.Vec3(
+                                size.x/2, size.y/2, size.z/2
+                            ));
+                            
+                            // メッシュの親（坂全体）からの相対位置を計算
+                            const relativePosition = center.clone().sub(mesh.position);
+                            
+                            colliders.push({
+                                shape: boxShape,
+                                position: new CANNON.Vec3(
+                                    relativePosition.x,
+                                    relativePosition.y,
+                                    relativePosition.z
+                                ),
+                                meshName: child.name || 'unnamed'
+                            });
+                            
+                            console.log(`コライダー追加: ${child.name || 'unnamed'}`, {
+                                size: size,
+                                position: relativePosition
+                            });
+                        }
+                    } catch (error) {
+                        console.warn('メッシュコライダー生成エラー:', error, child);
+                    }
+                }
+            });
+            
+            console.log(`生成されたコライダー数: ${colliders.length}`);
+            return colliders;
+        }
+        
         // 角度変換関数
         function toRadians(angle) {
             return angle * (Math.PI / 180);
@@ -941,6 +1168,70 @@
             }
         });
         
+        document.getElementById('showSlopeCollider').addEventListener('change', function() {
+            // 坂のコライダー表示の切り替え
+            console.log('坂のコライダー表示切り替え:', this.checked);
+            if (slopeColliderMesh) {
+                slopeColliderMesh.visible = this.checked;
+                console.log('坂のコライダー表示:', this.checked ? 'オン' : 'オフ');
+                console.log('コライダーメッシュ:', slopeColliderMesh);
+                console.log('コライダーメッシュの子要素数:', slopeColliderMesh.children.length);
+                
+                // 各子要素の詳細をログ出力
+                slopeColliderMesh.children.forEach((child, index) => {
+                    console.log(`コライダー子要素 ${index}:`, {
+                        visible: child.visible,
+                        position: child.position,
+                        geometry: child.geometry,
+                        material: child.material
+                    });
+                });
+            } else {
+                console.log('坂のコライダーメッシュが存在しません');
+            }
+        });
+        
+        document.getElementById('showSlopeMesh').addEventListener('change', function() {
+            // 坂のメッシュ表示の切り替え
+            console.log('坂のメッシュ表示切り替え:', this.checked);
+            if (slopeWireframeMesh) {
+                slopeWireframeMesh.visible = this.checked;
+                console.log('坂のワイヤーフレームメッシュ表示:', this.checked ? 'オン' : 'オフ');
+                console.log('ワイヤーフレームメッシュ:', slopeWireframeMesh);
+                console.log('ワイヤーフレームメッシュの子要素数:', slopeWireframeMesh.children.length);
+                
+                // 各子要素の詳細をログ出力
+                slopeWireframeMesh.children.forEach((child, index) => {
+                    console.log(`ワイヤーフレーム子要素 ${index}:`, {
+                        visible: child.visible,
+                        position: child.position,
+                        geometry: child.geometry,
+                        material: child.material
+                    });
+                });
+            } else {
+                console.log('坂のワイヤーフレームメッシュが存在しません');
+            }
+        });
+        
+        document.getElementById('showLanternCollider').addEventListener('change', function() {
+            // 灯籠のコライダー表示の切り替え
+            console.log('灯籠のコライダー表示切り替え:', this.checked);
+            for (let i = 0; i < lanterns.length; i++) {
+                const lantern = lanterns[i];
+                if (lantern.colliderMesh) {
+                    lantern.colliderMesh.visible = this.checked;
+                    console.log(`灯籠${i}のコライダー表示:`, this.checked ? 'オン' : 'オフ');
+                    console.log(`灯籠${i}のコライダーメッシュ:`, lantern.colliderMesh);
+                    console.log(`灯籠${i}のコライダーサイズ:`, {
+                        geometry: lantern.colliderMesh.geometry,
+                        position: lantern.colliderMesh.position,
+                        quaternion: lantern.colliderMesh.quaternion
+                    });
+                }
+            }
+        });
+        
         document.getElementById('resetCamera').addEventListener('click', function() {
             camera.position.set(0, 5, 15);
             camera.lookAt(0, 0, 0);
@@ -986,12 +1277,29 @@
                         lantern.body.quaternion.w
                     ));
                     
+                    // コライダーメッシュの位置と回転を更新
+                    if (lantern.colliderMesh) {
+                        lantern.colliderMesh.position.set(
+                            lantern.body.position.x,
+                            lantern.body.position.y,
+                            lantern.body.position.z
+                        );
+                        
+                        lantern.colliderMesh.quaternion.set(
+                            lantern.body.quaternion.x,
+                            lantern.body.quaternion.y,
+                            lantern.body.quaternion.z,
+                            lantern.body.quaternion.w
+                        );
+                    }
+                    
                     // 追加のY軸回転を適用（勢いよく転がる効果）
                     // 物理シミュレーションの速度に基づいてY軸回転速度を調整
                     const velocity = lantern.body.velocity.length();
                     const dynamicRotationSpeed = lantern.rotationSpeed + (velocity * 1.1);
                     // 回転の向きを逆にして、転がりの方向と一致させる
                     lantern.pivot.rotateY(-dynamicRotationSpeed);
+                    
                     
                     // 坂の道路表面から厳格な距離制限で転がるように調整
                     if (slopeMesh) {
@@ -1030,23 +1338,8 @@
                         document.getElementById('heightLimit').textContent = maxAllowedY.toFixed(2);
                         document.getElementById('distanceFromRoad').textContent = distanceFromRoad.toFixed(2) + 'm';
                         
-                        // Y座標が制限を超えた場合は厳格に制限する
-                        if (lantern.body.position.y > maxAllowedY) {
-                            lantern.body.position.y = maxAllowedY;
-                            // 上向きの速度を強制的に停止
-                            if (lantern.body.velocity.y > 0) {
-                                lantern.body.velocity.y = 0;
-                            }
-                        }
-                        
-                        // 坂を突き抜けないように下限も厳格に設定（実際の表面を使用）
-                        if (lantern.body.position.y < minAllowedY) {
-                            lantern.body.position.y = minAllowedY;
-                            // 下向きの速度を停止
-                            if (lantern.body.velocity.y < 0) {
-                                lantern.body.velocity.y = 0;
-                            }
-                        }
+                        // 道路面関連の制限を削除
+                        // 物理エンジンの自然な挙動に任せる
                     }
                     
                     // 灯籠が坂の範囲外に出た場合のみリセット
@@ -1061,6 +1354,16 @@
                         resetLanterns();
                         break; // リセット後はループを抜ける
                     }
+                }
+                
+                // 坂のコライダー表示を制御（チェックボックスの状態のみに依存）
+                if (slopeColliderMesh && slopeBody) {
+                    const showColliderCheckbox = document.getElementById('showSlopeCollider');
+                    // チェックボックスがオンの場合のみ表示
+                    slopeColliderMesh.visible = showColliderCheckbox.checked;
+                    
+                    // 接触状態をリセット（次のフレームで再判定）
+                    slopeBody.isColliding = false;
                 }
             }
             
