@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>坂のTrimeshコライダー</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #87CEEB;
+            font-family: sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            font-size: 14px;
+            border-radius: 4px;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 18px;
+        }
+        #controls {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            font-size: 14px;
+            border-radius: 4px;
+            width: 250px;
+        }
+        #controls label {
+            display: block;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+        #controls button {
+            margin: 5px 0;
+            padding: 8px 12px;
+            background: #4a90e2;
+            border: none;
+            border-radius: 3px;
+            color: white;
+            cursor: pointer;
+            width: 100%;
+        }
+        #controls button:hover {
+            background: #357ae8;
+        }
+        #debugConsole {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px;
+            font-size: 12px;
+            border-radius: 4px;
+            width: 300px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">坂のTrimeshコライダー - ドラッグ: 回転 | スクロール: ズーム</div>
+    <div id="loading">モデルを読み込み中...</div>
+    <div id="controls">
+        <h3 style="margin-top: 0;">表示制御</h3>
+        <label>
+            <input type="checkbox" id="showSlopeMesh" checked> 坂のメッシュ
+        </label>
+        <label>
+            <input type="checkbox" id="showTrimeshCollider"> Trimeshコライダー
+        </label>
+        <label>
+            <input type="checkbox" id="showLanternCollider"> 灯籠のコライダー
+        </label>
+        <button id="resetLantern">灯籠をリセット</button>
+        <button id="resetCamera">カメラリセット</button>
+        <hr>
+        <h4>Trimeshコライダー情報</h4>
+        <div id="trimeshInfo">
+            <div>頂点数: <span id="vertexCount">-</span></div>
+            <div>面数: <span id="faceCount">-</span></div>
+            <div>処理時間: <span id="processingTime">-</span>ms</div>
+        </div>
+    </div>
+    <div id="debugConsole">
+        <div style="font-weight: bold; margin-bottom: 5px;">デバッグコンソール</div>
+        <div id="debugOutput"></div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <script>
+        // シーン、カメラ、レンダラーの設定
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 10, 20);
+        camera.lookAt(0, 0, 0);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+        
+        // OrbitControlsを追加
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        
+        // 環境光と指向性ライトを追加
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+        
+        // XYZ軸を表示するヘルパーを追加
+        const axesHelper = new THREE.AxesHelper(5);
+        scene.add(axesHelper);
+        
+        // 物理世界
+        let world;
+        let slopeMesh = null;
+        let slopeTrimeshBody = null;
+        let trimeshColliderMesh = null;
+        let lanternBody = null;
+        let lanternMesh = null;
+        let lanternColliderMesh = null;
+        let lanternModel = null;
+        
+        // デバッグ出力関数
+        function debugLog(message) {
+            const debugOutput = document.getElementById('debugOutput');
+            const timestamp = new Date().toLocaleTimeString();
+            debugOutput.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            debugOutput.scrollTop = debugOutput.scrollHeight;
+            
+            // 最大100行まで保持
+            const lines = debugOutput.children;
+            if (lines.length > 100) {
+                debugOutput.removeChild(lines[0]);
+            }
+        }
+        
+        // 物理世界を初期化
+        function initPhysics() {
+            world = new CANNON.World();
+            world.gravity.set(0, -9.82, 0);
+            world.broadphase = new CANNON.SAPBroadphase(world);
+            world.solver.iterations = 20;
+            world.solver.tolerance = 0.0001;
+            
+            world.defaultContactMaterial.friction = 0.4;
+            world.defaultContactMaterial.restitution = 0.3;
+            world.allowSleep = true;
+            
+            debugLog('物理世界を初期化しました');
+        }
+        
+        // メッシュからTrimeshコライダーを作成する関数
+        function createTrimeshCollider(mesh) {
+            const startTime = performance.now();
+            debugLog('Trimeshコライダーの作成を開始...');
+            
+            const vertices = [];
+            const indices = [];
+            let vertexOffset = 0;
+            
+            // メッシュの全ての子オブジェクトを走査してジオメトリを統合
+            mesh.traverse(function(child) {
+                if (child.isMesh && child.geometry) {
+                    const geometry = child.geometry;
+                    
+                    // ジオメトリがBufferGeometryでない場合は変換
+                    let bufferGeometry;
+                    if (geometry.isBufferGeometry) {
+                        bufferGeometry = geometry;
+                    } else {
+                        bufferGeometry = new THREE.BufferGeometry().fromGeometry(geometry);
+                    }
+                    
+                    // 頂点データを取得
+                    const positionAttribute = bufferGeometry.attributes.position;
+                    if (!positionAttribute) {
+                        debugLog(`警告: ${child.name || 'unnamed'}に位置属性がありません`);
+                        return;
+                    }
+                    
+                    // ワールド変換行列を取得
+                    child.updateMatrixWorld(true);
+                    const worldMatrix = child.matrixWorld;
+                    
+                    // 頂点をワールド座標に変換して追加
+                    const tempVector = new THREE.Vector3();
+                    for (let i = 0; i < positionAttribute.count; i++) {
+                        tempVector.fromBufferAttribute(positionAttribute, i);
+                        tempVector.applyMatrix4(worldMatrix);
+                        vertices.push(tempVector.x, tempVector.y, tempVector.z);
+                    }
+                    
+                    // インデックスを追加
+                    const indexAttribute = bufferGeometry.index;
+                    if (indexAttribute) {
+                        // インデックス付きジオメトリ
+                        for (let i = 0; i < indexAttribute.count; i++) {
+                            indices.push(indexAttribute.getX(i) + vertexOffset);
+                        }
+                    } else {
+                        // インデックスなしジオメトリ
+                        for (let i = 0; i < positionAttribute.count; i++) {
+                            indices.push(i + vertexOffset);
+                        }
+                    }
+                    
+                    vertexOffset += positionAttribute.count;
+                    debugLog(`メッシュ "${child.name || 'unnamed'}" を処理: 頂点${positionAttribute.count}個`);
+                }
+            });
+            
+            if (vertices.length === 0 || indices.length === 0) {
+                debugLog('エラー: 有効なジオメトリデータが見つかりません');
+                return null;
+            }
+            
+            // Trimesh形状を作成
+            const trimeshShape = new CANNON.Trimesh(vertices, indices);
+            
+            // 物理ボディを作成
+            const trimeshBody = new CANNON.Body({ mass: 0 }); // 静的オブジェクト
+            trimeshBody.addShape(trimeshShape);
+            
+            // メッシュの位置に配置
+            const meshBox = new THREE.Box3().setFromObject(mesh);
+            const meshCenter = meshBox.getCenter(new THREE.Vector3());
+            trimeshBody.position.set(meshCenter.x, meshCenter.y, meshCenter.z);
+            
+            const endTime = performance.now();
+            const processingTime = Math.round(endTime - startTime);
+            
+            debugLog(`Trimeshコライダー作成完了: 頂点${vertices.length/3}個, 面${indices.length/3}個, ${processingTime}ms`);
+            
+            // 情報を表示
+            document.getElementById('vertexCount').textContent = Math.floor(vertices.length/3);
+            document.getElementById('faceCount').textContent = Math.floor(indices.length/3);
+            document.getElementById('processingTime').textContent = processingTime;
+            
+            return {
+                body: trimeshBody,
+                vertices: vertices,
+                indices: indices
+            };
+        }
+        
+        // Trimeshコライダーの視覚化メッシュを作成
+        function createTrimeshVisualization(vertices, indices) {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
+            
+            const material = new THREE.MeshBasicMaterial({
+                color: 0x00ff00,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.7
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.visible = false; // 初期状態では非表示
+            
+            return mesh;
+        }
+        
+        // 灯籠を作成する関数
+        function createLantern() {
+            // 既存の灯籠を削除
+            if (lanternBody) {
+                world.removeBody(lanternBody);
+            }
+            if (lanternMesh) {
+                scene.remove(lanternMesh);
+            }
+            if (lanternColliderMesh) {
+                scene.remove(lanternColliderMesh);
+            }
+            
+            if (lanternModel) {
+                // 灯籠モデルをクローンして使用
+                lanternMesh = lanternModel.clone();
+                lanternMesh.position.set(0, 10, -5); // 坂の上部に配置
+                scene.add(lanternMesh);
+                
+                // モデルのサイズを取得
+                const box = new THREE.Box3().setFromObject(lanternMesh);
+                const size = box.getSize(new THREE.Vector3());
+                
+                // 物理ボディを作成（円柱形状で近似）
+                const radius = Math.max(size.x, size.z) / 4;
+                const height = size.y / 2;
+                const cylinderShape = new CANNON.Cylinder(radius, radius, height, 8);
+                
+                lanternBody = new CANNON.Body({ mass: 5 });
+                lanternBody.addShape(cylinderShape);
+                lanternBody.position.set(0, 10, -5);
+                
+                // 横倒しの回転（Z軸周りに90度回転）
+                lanternBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 0, 1), Math.PI / 2);
+                
+                // 物理マテリアルを設定
+                lanternBody.material = new CANNON.Material();
+                lanternBody.material.friction = 0.4;
+                lanternBody.material.restitution = 0.1;
+                
+                // 減衰設定
+                lanternBody.linearDamping = 0.1;
+                lanternBody.angularDamping = 0.1;
+                
+                world.addBody(lanternBody);
+                
+                // コライダー視覚化メッシュ
+                const colliderGeometry = new THREE.CylinderGeometry(radius, radius, height, 16);
+                const colliderMaterial = new THREE.MeshBasicMaterial({
+                    color: 0xff00ff,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.5
+                });
+                
+                lanternColliderMesh = new THREE.Mesh(colliderGeometry, colliderMaterial);
+                lanternColliderMesh.position.set(0, 10, -5);
+                lanternColliderMesh.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+                lanternColliderMesh.visible = false; // 初期状態では非表示
+                scene.add(lanternColliderMesh);
+                
+                debugLog('灯籠を作成しました');
+            } else {
+                debugLog('エラー: 灯籠モデルが読み込まれていません');
+            }
+        }
+        
+        // GLTFローダーの設定
+        const dracoLoader = new THREE.DRACOLoader();
+        dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/');
+        
+        const loader = new THREE.GLTFLoader();
+        loader.setDRACOLoader(dracoLoader);
+        
+        // 坂モデル（miura_slope.glb）を読み込み
+        loader.load(
+            '_model/miura_slope.glb',
+            function(gltf) {
+                console.log('坂モデルを読み込みました');
+                debugLog('坂モデルを読み込みました');
+                
+                const slopeModel = gltf.scene;
+                
+                // モデルの位置を設定
+                slopeModel.position.set(0, 0, 0);
+                
+                // X軸で35°回転させる（simple_models.htmlと同じ）
+                const rotationAngle = 35 * Math.PI / 180; // 35度をラジアンに変換
+                slopeModel.rotation.x = rotationAngle;
+                
+                // シャドウを有効化
+                slopeModel.traverse(function(child) {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+                
+                scene.add(slopeModel);
+                slopeMesh = slopeModel;
+                
+                // Trimeshコライダーを作成（回転前のモデルから作成）
+                const trimeshResult = createTrimeshCollider(slopeModel);
+                if (trimeshResult) {
+                    slopeTrimeshBody = trimeshResult.body;
+                    
+                    // 物理ボディにも同じ回転を適用
+                    slopeTrimeshBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), rotationAngle);
+                    
+                    world.addBody(slopeTrimeshBody);
+                    
+                    // 視覚化メッシュを作成
+                    trimeshColliderMesh = createTrimeshVisualization(
+                        trimeshResult.vertices,
+                        trimeshResult.indices
+                    );
+                    
+                    // 視覚化メッシュにも同じ回転を適用
+                    trimeshColliderMesh.rotation.x = rotationAngle;
+                    
+                    scene.add(trimeshColliderMesh);
+                    
+                    debugLog('Trimeshコライダーを物理世界に追加しました（X軸35°回転適用）');
+                } else {
+                    debugLog('エラー: Trimeshコライダーの作成に失敗しました');
+                }
+                
+                // 灯籠モデルを読み込み
+                loadLanternModel();
+            },
+            function(xhr) {
+                console.log('坂モデル読み込み進捗:', (xhr.loaded / xhr.total * 100) + '%');
+            },
+            function(error) {
+                console.error('坂モデルの読み込みに失敗しました:', error);
+                debugLog('エラー: 坂モデルの読み込みに失敗しました');
+                document.getElementById('loading').style.display = 'none';
+            }
+        );
+        
+        // 灯籠モデルを読み込む関数
+        function loadLanternModel() {
+            loader.load(
+                '_model/Zen_Lantern_in_Garden_0425152153_texture_fbx/Zen_Lantern_in_Garden_0426020614_texture.glb',
+                function(gltf) {
+                    console.log('灯籠モデルを読み込みました');
+                    debugLog('灯籠モデルを読み込みました');
+                    
+                    lanternModel = gltf.scene;
+                    
+                    // モデルのサイズを調整
+                    const box = new THREE.Box3().setFromObject(lanternModel);
+                    const size = box.getSize(new THREE.Vector3()).length();
+                    const center = box.getCenter(new THREE.Vector3());
+                    
+                    // モデルを中央に配置
+                    lanternModel.position.x = -center.x;
+                    lanternModel.position.y = -center.y;
+                    lanternModel.position.z = -center.z;
+                    
+                    // モデルの根本（下部）を起点にする
+                    const bottomY = box.min.y;
+                    lanternModel.position.y -= bottomY;
+                    
+                    // シャドウを有効化
+                    lanternModel.traverse(function(child) {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    
+                    // 灯籠を作成
+                    createLantern();
+                    
+                    // ローディング表示を非表示
+                    document.getElementById('loading').style.display = 'none';
+                },
+                function(xhr) {
+                    console.log('灯籠モデル読み込み進捗:', (xhr.loaded / xhr.total * 100) + '%');
+                },
+                function(error) {
+                    console.error('灯籠モデルの読み込みに失敗しました:', error);
+                    debugLog('エラー: 灯籠モデルの読み込みに失敗しました');
+                    document.getElementById('loading').style.display = 'none';
+                }
+            );
+        }
+        
+        // チェックボックスのイベントリスナーを設定
+        document.getElementById('showSlopeMesh').addEventListener('change', function() {
+            if (slopeMesh) {
+                slopeMesh.visible = this.checked;
+                debugLog('坂のメッシュ表示: ' + (this.checked ? 'オン' : 'オフ'));
+            }
+        });
+        
+        document.getElementById('showTrimeshCollider').addEventListener('change', function() {
+            if (trimeshColliderMesh) {
+                trimeshColliderMesh.visible = this.checked;
+                debugLog('Trimeshコライダー表示: ' + (this.checked ? 'オン' : 'オフ'));
+            }
+        });
+        
+        document.getElementById('showLanternCollider').addEventListener('change', function() {
+            if (lanternColliderMesh) {
+                lanternColliderMesh.visible = this.checked;
+                debugLog('灯籠のコライダー表示: ' + (this.checked ? 'オン' : 'オフ'));
+            }
+        });
+        
+        document.getElementById('resetLantern').addEventListener('click', function() {
+            createLantern();
+        });
+        
+        document.getElementById('resetCamera').addEventListener('click', function() {
+            camera.position.set(0, 10, 20);
+            camera.lookAt(0, 0, 0);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        });
+        
+        // ウィンドウのリサイズ処理
+        window.addEventListener('resize', function () {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // OrbitControlsの更新
+            controls.update();
+            
+            // 物理シミュレーションの更新
+            if (world) {
+                world.step(1/60);
+                
+                // 灯籠の位置と回転を同期
+                if (lanternBody && lanternMesh) {
+                    lanternMesh.position.copy(new THREE.Vector3(
+                        lanternBody.position.x,
+                        lanternBody.position.y,
+                        lanternBody.position.z
+                    ));
+                    
+                    lanternMesh.quaternion.copy(new THREE.Quaternion(
+                        lanternBody.quaternion.x,
+                        lanternBody.quaternion.y,
+                        lanternBody.quaternion.z,
+                        lanternBody.quaternion.w
+                    ));
+                }
+                
+                // 灯籠のコライダーメッシュの位置と回転を同期
+                if (lanternBody && lanternColliderMesh) {
+                    lanternColliderMesh.position.copy(new THREE.Vector3(
+                        lanternBody.position.x,
+                        lanternBody.position.y,
+                        lanternBody.position.z
+                    ));
+                    
+                    lanternColliderMesh.quaternion.copy(new THREE.Quaternion(
+                        lanternBody.quaternion.x,
+                        lanternBody.quaternion.y,
+                        lanternBody.quaternion.z,
+                        lanternBody.quaternion.w
+                    ));
+                }
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // 物理世界を初期化
+        initPhysics();
+        
+        // アニメーション開始
+        animate();
+    </script>
+</body>
+</html>
